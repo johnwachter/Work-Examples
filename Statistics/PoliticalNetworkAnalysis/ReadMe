@@ -1,4 +1,4 @@
-###Statistical network analysis to measure strong and weak political polarization in the U.S. Senate.
+### Statistical network analysis to measure strong and weak political polarization in the U.S. Senate.###
 
 Data, which can be obtained on this repo, is the output of Zachary Neal's stochastic degree sequence model, a method for extracting a signed backbone network from a bipartite graph. We used the data to explore and model the networks. We built stochastic block models, latent position cluster models, and exponential random graph models, all of which helped illuminate the extent of strong (positive in-group relationships coupled with negative out-group relationships) and weak (positive in-group relationships) polarization in the U.S. Senate.
 
