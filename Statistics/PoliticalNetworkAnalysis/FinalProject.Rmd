@@ -1,0 +1,2554 @@
+---
+title: "567 Group Project"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.width=14, fig.height=10)
+```
+
+
+#Set Up & Basic Analysis ------
+
+```{r}
+if (!require('readxl')) 
+{
+  install.packages('readxl');
+  library(readxl)
+}
+
+if (!require('tidyverse')) 
+{
+  install.packages('tidyverse');
+  library(tidyverse);
+}
+
+if (!require('tinytex')) 
+{
+  install.packages('tinytex');
+  tinytex::install_tinytex;
+  library(tinytex)
+}
+
+if (!require('igraph')) 
+{
+  install.packages('igraph');
+  library(igraph)
+}
+
+if (!require('rlist')) 
+{
+  install.packages('rlist');
+  library(rlist)
+}
+
+if (!require('matrixStats')) 
+{
+  install.packages('matrixStats');
+  library(matrixStats)
+}
+
+if (!require('randnet')) 
+{
+  install.packages('randnet');
+  library(randnet)
+}
+
+if (!require('lsm')) 
+{
+  install.packages('lsm');
+  library(lsm)
+}
+
+if (!require('fields')) 
+{
+  install.packages('fields');
+  library(fields)
+}
+
+if (!require('ggthemes')) 
+{
+  install.packages('ggthemes');
+  library(ggthemes)
+}
+
+if (!require('latentnet')) 
+{
+  install.packages('latentnet');
+  library(latentnet)
+}
+```
+
+
+```{r}
+# Read in Data for one tab
+data <- read_excel("a_sign_of_the_times.xlsx", sheet = 45, col_names = FALSE)
+
+# Rename the first column to 'Covariates'
+names(data)[names(data) == "...1"] <- "Covariates"
+
+# Split Covariates Column into Name, Party, and State
+data <-  data %>% separate(Covariates, c("Name","State_Party"), sep = -6, remove = FALSE) %>% separate(State_Party,c("State", "Party"), sep = -3)
+
+# Pull out just the Party abbreviation from the string
+data$Party <- str_sub(data$Party, -2, -2)
+
+# Pull out just the State abbreviation from the string
+data$State <- str_sub(data$State, -2,-1)
+```
+
+```{r}
+# Create a new dataframe called covariates with the Name, State, and Party
+covariates <- data[, c(1:4)]
+
+# Remove covariates from the adjacency matrix and call it network
+network <- data[, c(5:length(data))]
+
+# Index (both row and column) by the original covariates column which includes Name, State, and Party
+row.names(network) <- covariates$Covariates
+names(network) <- covariates$Covariates
+
+# Turn the network into a matrix
+network <- as.matrix(network)
+
+# Turn the matrix into a weighted and undirected igraph obect - NOTE: the -1 value is used as a weight, but 
+# is difficult to handle for some calculations such as betweenness.
+g <- graph_from_adjacency_matrix(network, weighted = TRUE, mode = 'undirected')
+```
+
+```{r}
+# Add the number of negative relationships to covariates
+covariates$Negative <- rowSums(network == '-1', na.rm=TRUE)
+
+# Add the number of positive relationships to covariates
+covariates$Positive <- rowSums(network == '1', na.rm = TRUE)
+
+# Quick check on Total and Mean Positive and Negative values by Party
+covariates %>% group_by(Party) %>% summarize(negs = sum(Negative), pos = sum(Positive))
+covariates %>% group_by(Party) %>% summarize(negs = mean(Negative), pos = mean(Positive))
+```
+
+```{r}
+# Add the covariates as attributes to the graph object
+g <- set_vertex_attr(g, 'Party', value = covariates$Party)
+g <- set_vertex_attr(g, 'State', value = covariates$State)
+```
+
+```{r}
+# Plot the graph and differentiate nodes by color
+V(g)[Party == 'D']$color <- "blue"
+V(g)[Party == 'R']$color <- "red"
+V(g)[Party == 'I']$color <- "purple"
+plot(g, layout = layout_nicely, vertex.label = NA)
+```
+
+```{r}
+# If we wish to get rid of the negative weights, we can set the positive weights to 2 and negative to 1.
+# Just a bandaid for now.
+
+#network[network == 1] <- 2
+#network[network == -1] <- 1
+#g2 <- as.undirected(graph_from_adjacency_matrix(network))
+
+# Alternatively, we can create two separate graphs, one for positive connections and one for negative
+
+# Create a copy of the network matrix, and get rid of all -1 values
+pos_connections <- network
+pos_connections[pos_connections == -1] <- 0
+
+# Create a copy of the network matrix, and get rid of all +1 values and set -1 to +1
+neg_connections <- network
+neg_connections[neg_connections == 1] <- 0
+neg_connections[neg_connections == -1] <- 1
+
+# Turn the matrix into an igraph object and give it the Party and State attributes
+g_pos <- as.undirected(graph_from_adjacency_matrix(pos_connections))
+g_pos <- set_vertex_attr(g_pos, 'Party', value = covariates$Party)
+g_pos <- set_vertex_attr(g_pos, 'State', value = covariates$State)
+
+# Turn the matrix into an igraph object and give it the Party and State attributes
+g_neg <- as.undirected(graph_from_adjacency_matrix(neg_connections))
+g_neg <- set_vertex_attr(g_neg, 'Party', value = covariates$Party)
+g_neg <- set_vertex_attr(g_neg, 'State', value = covariates$State)
+```
+
+
+```{r}
+# Mapping Negative Connections
+V(g_neg)[Party == 'D']$color <- "blue"
+V(g_neg)[Party == 'R']$color <- "red"
+V(g_neg)[Party == 'I']$color <- "purple"
+plot(g_neg, layout = layout_nicely, vertex.label = NA, main = 'Negative Connections by Party')
+```
+
+
+```{r}
+# Mapping Positive Connections
+V(g_pos)[Party == 'D']$color <- "blue"
+V(g_pos)[Party == 'R']$color <- "red"
+V(g_pos)[Party == 'I']$color <- "purple"
+plot(g_pos, layout = layout_nicely, vertex.label = NA, main = 'Positive Connections by Party')
+```
+
+
+```{r}
+# Side by Side Comparison of negative and positive connections
+par(mfrow=c(1,2))
+plot(g_neg, layout = layout_nicely, vertex.label = NA, main = 'Negative Connections by Party')
+plot(g_pos, layout = layout_nicely, vertex.label = NA, main = 'Positive Connections by Party')
+```
+
+```{r}
+# Create subgraphs based on party
+r_pos_g <- induced.subgraph(g_pos, V(g_pos)[Party == 'R'])
+d_pos_g <- induced.subgraph(g_pos, V(g_pos)[Party == 'D'])
+r_neg_g <- induced.subgraph(g_neg, V(g_neg)[Party == 'R'])
+d_neg_g <- induced.subgraph(g_neg, V(g_neg)[Party == 'D'])
+```
+
+
+```{r}
+par(mfrow=c(2,2))
+plot(r_pos_g, layout = layout_nicely, vertex.label = NA, main = paste0('Positve Relationships - Republicans\nAvg Degree: ', round(mean(degree(r_pos_g)),0)))
+plot(d_pos_g, layout = layout_nicely, vertex.label = NA, main = paste0('Positve Relationships - Democrats\nAvg Degree: ', round(mean(degree(d_pos_g)),0)))
+plot(r_neg_g, layout = layout_nicely, vertex.label = NA, main = paste0('Negative Relationships - Republicans\nAvg Degree: ', round(mean(degree(r_neg_g)),0)))
+plot(d_neg_g, layout = layout_nicely, vertex.label = NA, main = paste0('Negative Relationships - Democrats\nAvg Degree: ', round(mean(degree(d_neg_g)),0)))
+```
+
+
+
+#Graph Properties ------
+
+
+```{r}
+# Positives
+par( mfrow=c(1,1) )
+hist( degree( g_pos ), xlab="Degree", main="Degree Distribution\nSenate, 114th Session" )
+summary( degree( g_pos ))
+
+sort( degree( g_pos ))
+
+head( sort( betweenness( g_pos )))
+tail( sort( betweenness( g_pos )))
+
+head( sort( closeness( g_pos )))
+tail( sort( closeness( g_pos )))
+
+head( sort( eigen_centrality( g_pos )$vector ))
+tail( sort( eigen_centrality( g_pos )$vector ))
+
+graph.density( g_pos )
+transitivity( g_pos )
+diameter( g_pos )
+is.connected( g_pos )
+```
+
+
+```{r}
+# Negatives
+hist( degree( g_neg ), xlab="Degree", main="Degree Distribution\nSenate, 114th Session" )
+summary( degree( g_neg ))
+
+head( sort( betweenness( g_neg )))
+tail( sort( betweenness( g_neg )))
+
+head( sort( closeness( g_neg )))
+tail( sort( closeness( g_neg )))
+
+head( sort( eigen_centrality( g_neg )$vector ))
+tail( sort( eigen_centrality( g_neg )$vector ))
+
+graph.density( g_neg )
+transitivity( g_neg )
+diameter( g_neg )
+is.connected( g_neg )
+```
+
+
+#Single Network Modeling ------
+
+```{r}
+# Community Detection using cluster_fast_greedy
+block_pos <- cluster_fast_greedy(g_pos)
+block_neg <- cluster_fast_greedy(g_neg)
+
+# Plot the detected clusters and give node labels corresponding to party
+par(mfrow=c(1,2))
+plot(block_pos, g_pos, vertex.label = vertex_attr(g_pos)$Party, main = 'Positive Relationship - Clusters')
+plot(block_neg, g_neg, vertex.label = vertex_attr(g_neg)$Party, main = 'Negative Relationships- Clusters')
+```
+
+
+ESTIMATED PROBABILITIES FOR POSITIVE NETWORKS - BY HAND
+```{r}
+n_membership = rep(0, 3)
+
+n_membership[1] =  sum(block_pos$membership == 1) # returns number of nodes in community 1.
+n_membership[2] =  sum(block_pos$membership == 2) # returns number of nodes in community 2.
+n_membership[3] =  sum(block_pos$membership == 3) # returns number of nodes in community 3.
+
+hat_P = matrix(rep(0, 9), ncol = 3)
+for(i in 1:3){
+  for(j in 1:3){
+  if (i != j){
+  hat_P[i,j] = 1/(n_membership[i] * n_membership[j]) * sum(g_pos[(block_pos$membership == i), (block_pos$membership == j)])
+  }
+  }
+}
+
+# Now fill in the diagonal 
+for(i in 1:3){
+  hat_P[i,i] = choose(n_membership[i], 2)^(-1) * sum(g_pos[(block_pos$membership == i), (block_pos$membership == i)])/2
+}
+print(hat_P)
+```
+
+
+ESTIMATED PROBABILITIES FOR NEGATIVE NETWORKS - BY HAND
+```{r}
+n_membership = rep(0, 3)
+
+n_membership[1] = sum(block_neg$membership == 1) # returns number of nodes in community 1.
+n_membership[2] = sum(block_neg$membership == 2) # returns number of nodes in community 2.
+n_membership[3] = sum(block_neg$membership == 3) # returns number of nodes in community 3.
+
+hat_P = matrix(rep(0, 9), ncol = 3)
+for(i in 1:3){
+  for(j in 1:3){
+  if (i != j){
+  hat_P[i,j] = 1/(n_membership[i] * n_membership[j]) * sum(g_neg[(block_neg$membership == i), (block_neg$membership == j)])
+  }
+  }
+}
+
+# Now fill in the diagonal 
+for(i in 1:3){
+  hat_P[i,i] = choose(n_membership[i], 2)^(-1) * sum(g_neg[(block_neg$membership == i), (block_neg$membership == i)])/2
+}
+print(hat_P)
+```
+
+```{r}
+# Maybe we want a degree corrected stochastic block model: let's check the degree distribution per communitiy
+degree_dist_comm_table <- table(block_pos$membership, degree(g_pos))
+degree_dist_comm_1 <- degree_dist_comm_table[1,][degree_dist_comm_table[1,] > 0]
+degree_dist_comm_2 <- degree_dist_comm_table[2,][degree_dist_comm_table[2,] > 0]
+degree_dist_comm_3 <- degree_dist_comm_table[3,][degree_dist_comm_table[3,] > 0]
+
+par(mfrow = c(1,3))
+hist(as.integer(names(degree_dist_comm_1)))
+hist(as.integer(names(degree_dist_comm_2)))
+hist(as.integer(names(degree_dist_comm_3)))
+
+```
+
+
+
+```{r}
+# Degree Corrected Stochastic Block Model using randnet: https://cran.r-project.org/web/packages/randnet/randnet.pdf
+
+# Need an adjacency matrix
+g_pos_adj_matrix <- as_adjacency_matrix(g_pos)
+g_neg_adj_matrix <- as_adjacency_matrix(g_neg)
+
+# Pass in the adjacency matrix and the membership computed via cluster_fast_greedy
+dcsbm_pos <- DCSBM.estimate(g_pos_adj_matrix, block_pos$membership)
+dcsbm_neg <- DCSBM.estimate(g_neg_adj_matrix, block_neg$membership)
+
+# Show the connection probability matrix
+dcsbm_pos$B
+dcsbm_neg$B
+```
+
+
+ESTIMATED PROBABILITIES FOR POSITIVE NETWORKS - USING SBM.ESTIMATE()
+```{r}
+sbm_pos <- SBM.estimate(g_pos_adj_matrix, block_pos$membership)
+sbm_pos$B
+```
+
+```{r}
+# Create a table that breaks membership computed via cluster_fast_greedy along party lines
+table(vertex_attr(g_pos)$Party, block_pos$membership)
+table(vertex_attr(g_neg)$Party, block_neg$membership)
+```
+Democrats and Republicans have some slight overlap in the first cluster for positive relationships, let's see who the senators are.
+
+```{r}
+vertex_attr(g_pos)$name[block_pos$membership == 1]
+```
+
+
+Calculate by hand by creating an edge list, turning that into a dataframe
+```{r}
+el_pos <- as_edgelist(g_pos)
+el_neg <- as_edgelist(g_neg)
+el_pos_df <- as.data.frame(el_pos)
+el_neg_df <- as.data.frame(el_neg)
+```
+
+
+```{r}
+# Split Covariates Column into Name, Party, and State
+el_pos_df <-  el_pos_df %>% separate(V1, c("Name_v1","State_Party"), sep = -6, remove = FALSE) %>% separate(State_Party,c("State_v1", "Party_v1"), sep = -3)
+el_pos_df <-  el_pos_df %>% separate(V2, c("Name_v2","State_Party"), sep = -6, remove = FALSE) %>% separate(State_Party,c("State_v2", "Party_v2"), sep = -3)
+el_neg_df <-  el_neg_df %>% separate(V1, c("Name_v1","State_Party"), sep = -6, remove = FALSE) %>% separate(State_Party,c("State_v1", "Party_v1"), sep = -3)
+el_neg_df <-  el_neg_df %>% separate(V2, c("Name_v2","State_Party"), sep = -6, remove = FALSE) %>% separate(State_Party,c("State_v2", "Party_v2"), sep = -3)
+# Pull out just the Party abbreviation from the string
+el_pos_df$Party_v1 <- str_sub(el_pos_df$Party_v1, -2, -2)
+el_pos_df$Party_v2 <- str_sub(el_pos_df$Party_v2, -2, -2)
+el_neg_df$Party_v1 <- str_sub(el_neg_df$Party_v1, -2, -2)
+el_neg_df$Party_v2 <- str_sub(el_neg_df$Party_v2, -2, -2)
+# Pull out just the State abbreviation from the string
+el_pos_df$State_v1 <- str_sub(el_pos_df$State_v1, -2,-1)
+el_pos_df$State_v2 <- str_sub(el_pos_df$State_v2, -2,-1)
+el_neg_df$State_v1 <- str_sub(el_neg_df$State_v1, -2,-1)
+el_neg_df$State_v2 <- str_sub(el_neg_df$State_v2, -2,-1)
+# Add Column to signify whether interaction was from the same party
+el_pos_df$Same_Party <- el_pos_df$Party_v1 == el_pos_df$Party_v2
+el_neg_df$Same_Party <- el_neg_df$Party_v1 == el_neg_df$Party_v2
+
+# Add the 'SampeParty' color as an Edge Attribute to make graphs easier to see
+g_pos <- set_edge_attr(g_pos, 'SameParty', value = el_pos_df$Same_Party)
+g_neg <- set_edge_attr(g_neg, 'SameParty', value = el_neg_df$Same_Party)
+```
+
+
+```{r}
+# Map positive connections and color edges by whether or not they link nodes of the same party
+par(mfrow = c(1,2))
+
+V(g_neg)[Party == 'D']$color <- "blue"
+V(g_neg)[Party == 'R']$color <- "red"
+V(g_neg)[Party == 'I']$color <- "purple"
+E(g_neg)[SameParty == TRUE]$color <- "green"
+E(g_neg)[SameParty == FALSE]$color <- "black"
+plot(g_neg, layout = layout_nicely, vertex.label = NA, main = 'Negative Connections by Party', vertex.size = 2.5)
+
+legend(x = "topleft", legend = c(TRUE, FALSE), pch = 19, col = c("green", "black"), title = "Same-Party Connection")
+
+V(g_pos)[Party == 'D']$color <- "blue"
+V(g_pos)[Party == 'R']$color <- "red"
+V(g_pos)[Party == 'I']$color <- "purple"
+E(g_pos)[SameParty == TRUE]$color <- "green"
+E(g_pos)[SameParty == FALSE]$color <- "black"
+plot(g_pos, layout = layout_nicely, vertex.label = NA, main = 'Positive Connections by Party', vertex.size = 2.5)
+```
+
+
+```{r}
+table(el_pos_df$Party_v1, el_pos_df$Party_v2)
+table(el_neg_df$Party_v1, el_neg_df$Party_v2)
+el_pos_df %>% filter(Party_v1 == 'D' & Party_v2 == 'R')
+```
+
+Looks like a lot of the positive relationships across political parties comes from within-state relationships - two layers of homophily?
+
+
+ANOTHER WAY TO EXAMPLE RELATIONSHIPS BETWEEN PARTIES IS BY USING ASSORTATIVITY: https://dshizuka.github.io/networkanalysis/05_community.html
+```{r}
+# USE THE +1 so that as.integer results in 1s and 2s not 0s and 1s
+assortativity(g_pos, (V(g_pos)$Party == "D"), (V(g_pos)$Party == 'D') +1, directed = FALSE)
+assortativity_nominal(g_pos, (V(g_pos)$Party == 'R')+1)
+```
+Why does this give us a different value than the proportion table?
+
+
+#Single Network Modeling Part 2 ------
+
+```{r}
+data <- read_excel("a_sign_of_the_times.xlsx", sheet = 45, col_names = FALSE)
+
+# Rename the first column to 'Covariates'
+names(data)[names(data) == "...1"] <- "Covariates"
+
+# Split Covariates Column into Name, Party, and State
+data <-  data %>% separate(Covariates, c("Name","State_Party"), sep = -6, remove = FALSE) %>% separate(State_Party,c("State", "Party"), sep = -3)
+
+# Pull out just the Party abbreviation from the string
+data$Party <- str_sub(data$Party, -2, -2)
+
+# Pull out just the State abbreviation from the string
+data$State <- str_sub(data$State, -2,-1)
+
+# Create a new dataframe called covariates with the Name, State, and Party
+covariates <- data[, c(1:4)]
+
+# Remove covariates from the adjacency matrix and call it network
+network <- data[, c(5:length(data))]
+
+# Index (both row and column) by the original covariates column which includes Name, State, and Party
+row.names(network) <- covariates$Covariates
+names(network) <- covariates$Covariates
+
+# Turn the network into a matrix
+network <- as.matrix(network)
+
+# Turn the matrix into a weighted and undirected igraph obect - NOTE: the -1 value is used as a weight, but 
+# is difficult to handle for some calculations such as betweenness.
+g <- graph_from_adjacency_matrix(network, weighted = TRUE, mode = 'undirected')
+
+covariates$Negative <- rowSums(network == '-1', na.rm=TRUE)
+
+# Add the number of positive relationships to covariates
+covariates$Positive <- rowSums(network == '1', na.rm = TRUE)
+
+# Add the covariates as attributes to the graph object
+g <- set_vertex_attr(g, 'Party', value = covariates$Party)
+g <- set_vertex_attr(g, 'State', value = covariates$State)
+```
+
+
+```{r}
+# If we wish to get rid of the negative weights, we can set the positive weights to 2 and negative to 1.
+# Just a bandaid for now.
+
+#network[network == 1] <- 2
+#network[network == -1] <- 1
+#g2 <- as.undirected(graph_from_adjacency_matrix(network))
+
+# Alternatively, we can create two separate graphs, one for positive connections and one for negative
+
+# Create a copy of the network matrix, and get rid of all -1 values
+pos_connections <- network
+pos_connections[pos_connections == -1] <- 0
+
+# Create a copy of the network matrix, and get rid of all +1 values and set -1 to +1
+neg_connections <- network
+neg_connections[neg_connections == 1] <- 0
+neg_connections[neg_connections == -1] <- 1
+
+# Turn the matrix into an igraph object and give it the Party and State attributes
+g_pos <- as.undirected(graph_from_adjacency_matrix(pos_connections))
+g_pos <- set_vertex_attr(g_pos, 'Party', value = covariates$Party)
+g_pos <- set_vertex_attr(g_pos, 'State', value = covariates$State)
+
+# Turn the matrix into an igraph object and give it the Party and State attributes
+g_neg <- as.undirected(graph_from_adjacency_matrix(neg_connections))
+g_neg <- set_vertex_attr(g_neg, 'Party', value = covariates$Party)
+g_neg <- set_vertex_attr(g_neg, 'State', value = covariates$State)
+```
+
+
+ESTIMATED PROBABILITIES FOR POSITIVE NETWORKS - USING SBM.ESTIMATE()
+```{r}
+# Community Detection using cluster_fast_greedy
+block_pos <- cluster_edge_betweenness(g_pos)
+sbm_pos <- SBM.estimate(g_pos_adj_matrix, block_pos$membership)
+sbm_pos$B
+```
+
+
+ESTIMATED PROBABILITIES FOR POSITIVE NETWORKS - USING latentnet
+```{r}
+g_pos_adj_matrix <- as.matrix(as_adjacency_matrix(g_pos))
+g_neg_adj_matrix <- as.matrix(as_adjacency_matrix(g_neg))
+g_pos_net=network(g_pos_adj_matrix,directed = FALSE)
+g_neg_net=network(g_neg_adj_matrix,directed = FALSE)
+
+hist(degree(g_pos),breaks=50)
+Same_party=g_pos_adj_matrix
+Same_Stat=g_pos_adj_matrix
+for(i in 1:(dim(Same_party)[1]-1))
+{
+  for(j in (i+1):dim(Same_party)[1])
+  {
+    Same_party[i,j]=as.numeric(covariates$Party[i]==covariates$Party[j])
+    Same_party[j,i]=Same_party[i,j]
+    Same_Stat[i,j]=as.numeric(covariates$State[i]==covariates$State[j])
+    Same_Stat[j,i]=Same_Stat[i,j]
+  }
+}
+result1=ergmm(g_pos_net ~ euclidean(d = 2,G=2), tofit="mle")
+
+#result1=ergmm(g_pos_net ~ euclidean(d = 2,G=3), tofit="mle")
+
+# result2=ergmm(g_pos_net ~edgecov(Same_party) + euclidean(d = 2,G=2))
+# 
+# result3=ergmm(g_pos_net ~ edgecov(Same_party) + edgecov(Same_Stat) + euclidean(d = 2,G=2))
+
+oneLcolors<-covariates$Party
+oneLcolors[oneLcolors=='D']='blue'
+oneLcolors[oneLcolors=='R']='red'
+oneLcolors[oneLcolors=='I']='purple'
+
+plot(result1,what = "mle")
+
+plot(result1,vertex.col = oneLcolors,what = "mle", main = "MLE positions", print.formula = FALSE,labels = FALSE,vertex.cex = 2,xlim=c(-15,15),ylim=c(-15,15))
+```
+
+
+#Single Network Modeling Part 3 ------
+
+ERGM Modeling -  114th session
+
+```{r}
+expit <- function(x){
+exp(x) / (1 + exp(x))
+}
+
+# Full Network ERGM ####
+g.ergm <- network(as.matrix(as_adjacency_matrix(g)))
+set.vertex.attribute(g.ergm,"Party",vertex.attributes(g)$Party)
+set.vertex.attribute(g.ergm,"State",vertex.attributes(g)$State)
+set.vertex.attribute(g.ergm,"Name",vertex.attributes(g)$name)
+M1 <- ergm(g.ergm ~ edges, 
+           control = control.ergm(MCMC.burnin = 5000, 
+                                  MCMC.interval =  10,
+                                  MCMLE.maxit = 10))
+summary(M1) # Potentially use for the poster
+
+M1.1 <- ergm(g.ergm ~ edges + match("Party"), 
+           control = control.ergm(MCMC.burnin = 5000, 
+                                  MCMC.interval =  10,
+                                  MCMLE.maxit = 10))
+summary(M1.1)
+
+M1.2 <- ergm(g.ergm ~ edges + match("State"), 
+           control = control.ergm(MCMC.burnin = 5000, 
+                                  MCMC.interval =  10,
+                                  MCMLE.maxit = 10))
+summary(M1.2)
+
+M1.3 <- ergm(g.ergm ~ edges + match("Party") + match("State"), 
+           control = control.ergm(MCMC.burnin = 5000, 
+                                  MCMC.interval =  10,
+                                  MCMLE.maxit = 10))
+summary(M1.3)
+
+# General Positive ####
+g_pos.ergm <- network(as.matrix(as_adjacency_matrix(g_pos)))
+set.vertex.attribute(g_pos.ergm,"Party",vertex.attributes(g_pos)$Party)
+set.vertex.attribute(g_pos.ergm,"State",vertex.attributes(g_pos)$State)
+set.vertex.attribute(g_pos.ergm,"Name",vertex.attributes(g_pos)$name)
+M2 <- ergm(g_pos.ergm ~ edges, 
+           control = control.ergm(MCMC.burnin = 5000, 
+                                  MCMC.interval =  10,
+                                  MCMLE.maxit = 10))
+summary(M2)  # Potentially use for the poster
+
+M2.1 <- ergm(g_pos.ergm ~ edges + match("Party"), 
+           control = control.ergm(MCMC.burnin = 5000, 
+                                  MCMC.interval =  10,
+                                  MCMLE.maxit = 10))
+summary(M2.1)
+M2.1.E.EP <- expit(M2.1$coef[1])
+M2.1.E.EP <- c(M2.1.E.EP, expit(M2.1$coef[1] + M2.1$coef[2]))
+M2.1.E.EP
+
+M2.2 <- ergm(g_pos.ergm ~ edges + match("State"), 
+           control = control.ergm(MCMC.burnin = 5000, 
+                                  MCMC.interval =  10,
+                                  MCMLE.maxit = 10))
+summary(M2.2)
+
+M2.3 <- ergm(g_pos.ergm ~ edges + match("Party") + match("State"), 
+           control = control.ergm(MCMC.burnin = 5000, 
+                                  MCMC.interval =  10,
+                                  MCMLE.maxit = 10))
+summary(M2.3)  # Potentially use for the poster
+
+# General Negative ####
+g_neg.ergm <- network(as.matrix(as_adjacency_matrix(g_neg)))
+set.vertex.attribute(g_neg.ergm,"Party",vertex.attributes(g_neg)$Party)
+set.vertex.attribute(g_neg.ergm,"State",vertex.attributes(g_neg)$State)
+set.vertex.attribute(g_neg.ergm,"Name",vertex.attributes(g_neg)$name)
+M3 <- ergm(g_neg.ergm ~ edges, 
+           control = control.ergm(MCMC.burnin = 5000, 
+                                  MCMC.interval =  10,
+                                  MCMLE.maxit = 10))
+summary(M3)  # Potentially use for the poster
+
+M3.1 <- ergm(g_neg.ergm ~ edges + match("Party"), 
+           control = control.ergm(MCMC.burnin = 5000, 
+                                  MCMC.interval =  10,
+                                  MCMLE.maxit = 10))
+summary(M3.1)
+
+M3.2 <- ergm(g_neg.ergm ~ edges + match("State"), 
+           control = control.ergm(MCMC.burnin = 5000, 
+                                  MCMC.interval =  10,
+                                  MCMLE.maxit = 10))
+summary(M3.2)
+
+M3.3 <- ergm(g_neg.ergm ~ edges + match("Party") + match("State"), 
+           control = control.ergm(MCMC.burnin = 5000, 
+                                  MCMC.interval =  10,
+                                  MCMLE.maxit = 10))
+summary(M3.3)  # Potentially use for the poster
+
+# Pos. Democratic ERGM ####
+g_pos_dem.ergm <- network(as.matrix(as_adjacency_matrix(d_pos_g)))
+set.vertex.attribute(g_pos_dem.ergm,"State",vertex.attributes(d_pos_g)$State)
+M4 <- ergm(g_pos_dem.ergm ~ edges, 
+           control = control.ergm(MCMC.burnin = 5000, 
+                                  MCMC.interval =  10,
+                                  MCMLE.maxit = 10))
+summary(M4)
+
+# Neg. Democratic ERGM ####
+g_neg_dem.ergm <- network(as.matrix(as_adjacency_matrix(d_neg_g)))
+set.vertex.attribute(g_neg_dem.ergm,"State",vertex.attributes(d_neg_g)$State)
+M5 <- ergm(g_neg_dem.ergm ~ edges, 
+           control = control.ergm(MCMC.burnin = 5000, 
+                                  MCMC.interval =  10,
+                                  MCMLE.maxit = 10))
+summary(M5)
+
+# Pos. Republican ERGM ####
+g_pos_rep.ergm <- network(as.matrix(as_adjacency_matrix(r_pos_g)))
+set.vertex.attribute(g_pos_rep.ergm,"State",vertex.attributes(r_pos_g)$State)
+M6 <- ergm(g_pos_rep.ergm ~ edges, 
+           control = control.ergm(MCMC.burnin = 5000, 
+                                  MCMC.interval =  10,
+                                  MCMLE.maxit = 10))
+summary(M6)
+
+# Neg. Republican ERGM ####
+g_neg_rep.ergm <- network(as.matrix(as_adjacency_matrix(r_neg_g)))
+set.vertex.attribute(g_neg_rep.ergm,"State",vertex.attributes(r_neg_g)$State)
+M7 <- ergm(g_neg_rep.ergm ~ edges, 
+           control = control.ergm(MCMC.burnin = 5000, 
+                                  MCMC.interval =  10,
+                                  MCMLE.maxit = 10))
+summary(M7)
+
+```
+
+
+
+
+#Longitudinal Set Up & Basic Analysis ------
+
+```{r}
+# Read in Data from each tab and store a dataframe in a list so df is a list of dataframes
+df <- c()
+for (i in 1:45){
+  df[[i]] <- read_excel("a_sign_of_the_times.xlsx", sheet = i, col_names = FALSE)
+}
+
+# Remove the first element from the list because the first tab is a read_me page and does not contain data
+df <- df[-1]
+```
+
+
+```{r}
+# For each dataframe, rename the first column to 'Covariates', split Covariates Column into Name, Party, and State,
+# and pull out just the Party and State abbreviations from the new columns
+for (i in seq_along(df)){
+  names(df[[i]])[names(df[[i]]) == "...1"] <- "Covariates"
+  
+  df[[i]] <- df[[i]] %>% separate(Covariates, c("Name","State_Party"), sep = -6, remove = FALSE) %>% separate(State_Party,c("State",    "Party"), sep = -3)
+  
+  df[[i]]$Party <- str_sub(df[[i]]$Party, -2, -2)
+  
+  df[[i]]$State <- str_sub(df[[i]]$State, -2, -1)
+}
+```
+
+```{r}
+# Create a new list of dataframes called covariates
+covariates_dfs <- c()
+
+# Create a new list of dataframes called networks
+networks_dfs <- c()
+
+for (i in seq_along(df)){
+  # Loop through the list of dataframes and for each dataframe pull out the first four columns of 
+  # covariate data and add those columns as a new element in the covariates list
+  covariates_dfs[[i]] <- df[[i]][, c(1:4)]
+  
+  #Loop through the list of dataframes and for each dataframe remove the first four columns 
+  # and add the remaining columns as a new element in the networks list
+  networks_dfs[[i]] <- df[[i]][, c(5:length(df[[i]]))]
+}
+```
+
+
+```{r}
+# Duplicate names for a couple of congresses so I need to tweak them since you can't have duplicate record IDs
+
+#https://en.wikipedia.org/wiki/97th_United_States_Congress
+covariates_dfs[[5]]$Covariates[[94]] <- 'Ashbrook, Jean. (OH-R)'
+
+#https://en.wikipedia.org/wiki/112th_United_States_Congress
+covariates_dfs[[20]]$Covariates[[450]] <- 'Payne, D Jr. (NJ-D)'
+```
+
+
+```{r}
+# Loop through the networks_dfs and index (both row and column) by the original covariates column which includes Name, State, and Party
+for (i in 1:44){
+  row.names(networks_dfs[[i]]) <- covariates_dfs[[i]]$Covariates
+  names(networks_dfs[[i]]) <- covariates_dfs[[i]]$Covariates
+}
+```
+
+
+```{r}
+# Turns each df in the networks_dfs list into an igraph object
+networks <- c()
+
+for (i in seq_along(networks_dfs)){
+  networks[[i]] <- graph_from_adjacency_matrix(as.matrix(networks_dfs[[i]]), weighted = TRUE, mode = 'undirected')
+}
+```
+
+
+```{r}
+# Create two separate graphs, one for positive connections and one for negative, for each network
+pos_networks <- networks_dfs
+neg_networks <- networks_dfs
+
+# Create a copy of the network matrix, and get rid of all -1 values
+for (i in seq_along(pos_networks)){
+  pos_networks[[i]][pos_networks[[i]] == -1] <- 0
+}
+
+# Create a copy of the network matrix, and get rid of all +1 values and set -1 to +1
+for (i in seq_along(neg_networks)){
+  neg_networks[[i]][neg_networks[[i]] == 1] <- 0
+  neg_networks[[i]][neg_networks[[i]] == -1] <- 1
+}
+```
+
+
+```{r}
+# Turn the matrices into igraphs object and give it the Party and State attributes
+g_pos_networks <- list()
+g_neg_networks <- list()
+
+for (i in seq_along(pos_networks)){
+  g_pos_networks[[i]] <- as.undirected(graph_from_adjacency_matrix(as.matrix(pos_networks[[i]])))
+  g_pos_networks[[i]] <- set_vertex_attr(g_pos_networks[[i]], 'Party', value = covariates_dfs[[i]]$Party)
+  g_pos_networks[[i]] <- set_vertex_attr(g_pos_networks[[i]], 'State', value = covariates_dfs[[i]]$State)
+}
+  
+for (i in seq_along(neg_networks)){
+  g_neg_networks[[i]] <- as.undirected(graph_from_adjacency_matrix(as.matrix(neg_networks[[i]])))
+  g_neg_networks[[i]] <- set_vertex_attr(g_neg_networks[[i]], 'Party', value = covariates_dfs[[i]]$Party)
+  g_neg_networks[[i]] <- set_vertex_attr(g_neg_networks[[i]], 'State', value = covariates_dfs[[i]]$State)
+  
+}
+```
+
+
+```{r}
+V(g_neg_networks[[44]])[Party == 'D']$color <- "blue"
+V(g_neg_networks[[44]])[Party == 'R']$color <- "red"
+V(g_neg_networks[[44]])[Party == 'I']$color <- "purple"
+
+
+plot(g_neg_networks[[44]], layout = layout_nicely, vertex.label = NA, main = 'Negative Connections by Party')
+```
+
+
+
+```{r}
+temp <- data.frame(as_edgelist(g_pos_networks[[44]]))
+temp <- temp %>% separate(X1, c("Name_v1","State_Party"), sep = -6, remove = FALSE) %>% separate(State_Party,c("State_v1", "Party_v1"), sep = -3)
+temp <- temp %>% separate(X2, c("Name_v2","State_Party"), sep = -6, remove = FALSE) %>% separate(State_Party,c("State_v2", "Party_v2"), sep = -3)
+temp$Party_v1 <- str_sub(temp$Party_v1, -2, -2)
+temp$Party_v2 <- str_sub(temp$Party_v2, -2, -2)
+temp$State_v1 <- str_sub(temp$State_v1, -2,-1)
+temp$State_v2 <- str_sub(temp$State_v2, -2,-1)
+temp$PartyCombo <- paste(temp$Party_v1, temp$Party_v2)
+g_pos_networks[[44]] <- set_edge_attr(g_pos_networks[[44]], 'ConectType', value = temp$PartyCombo)
+
+temp <- temp %>% mutate('Col' = case_when(PartyCombo == 'D D' ~ 'blue',
+                                          PartyCombo == 'R R' ~ 'red',
+                                          PartyCombo == 'D R' ~ 'purple',
+                                          PartyCombo == 'R D' ~ 'purple',
+                                          PartyCombo == 'D I' ~ 'grey',
+                                          PartyCombo == 'I D' ~ 'grey',
+                                          PartyCombo == 'R I' ~ 'grey'))
+
+g_pos_networks[[44]] <- set_edge_attr(g_pos_networks[[44]], 'Col', value = temp$Col)
+
+V(g_pos_networks[[44]])[Party == 'D']$color <- "blue"
+V(g_pos_networks[[44]])[Party == 'R']$color <- "red"
+V(g_pos_networks[[44]])[Party == 'I']$color <- "purple"
+
+# Create function to normalize all scores to 0 and 1
+range01 <- function(x){(x-min(x))/(max(x)-min(x))}
+
+V(g_pos_networks[[44]])$size <- (range01(betweenness(g_pos_networks[[44]]))+.25)*7.5
+
+fig.height = 10
+fig.width = 10
+
+plot(g_pos_networks[[44]], vertex.label = NA, layout = layout.fruchterman.reingold, 
+     main = 'Political Alliance Network Among U.S. Senators\n 114th Congressional Session', 
+     edge.color = adjustcolor(E(g_pos_networks[[44]])$Col, alpha.f = .4),
+     sub = "Nodes are colored by political party affiliation, where blue, red and purple nodes indicate Democrats, Republicans, and Independents, respectively.\nBlue edges indicate a political alliance between two Democrats, red edges between two Republicans,\nand purple edges indicate a cross-party political alliance. Nodes are sized on betweenness centrality.")
+
+legend(x = "topleft", legend = c('Democrat', 'Republican', 'Independent'), pch = 19, col = c("blue", "red", "purple"), title = "Political Party Affiliation")
+
+```
+
+
+```{r}
+temp <- data.frame(as_edgelist(g_pos_networks[[44]]))
+temp <- temp %>% separate(X1, c("Name_v1","State_Party"), sep = -6, remove = FALSE) %>% separate(State_Party,c("State_v1", "Party_v1"), sep = -3)
+temp <- temp %>% separate(X2, c("Name_v2","State_Party"), sep = -6, remove = FALSE) %>% separate(State_Party,c("State_v2", "Party_v2"), sep = -3)
+temp$Party_v1 <- str_sub(temp$Party_v1, -2, -2)
+temp$Party_v2 <- str_sub(temp$Party_v2, -2, -2)
+temp$State_v1 <- str_sub(temp$State_v1, -2,-1)
+temp$State_v2 <- str_sub(temp$State_v2, -2,-1)
+temp$PartyCombo <- paste(temp$Party_v1, temp$Party_v2)
+g_pos_networks[[44]] <- set_edge_attr(g_pos_networks[[44]], 'ConectType', value = temp$PartyCombo)
+
+temp <- temp %>% mutate('Col' = case_when(PartyCombo == 'D D' ~ 'blue',
+                                          PartyCombo == 'R R' ~ 'red',
+                                          PartyCombo == 'D R' ~ 'purple',
+                                          PartyCombo == 'R D' ~ 'purple',
+                                          PartyCombo == 'D I' ~ 'grey',
+                                          PartyCombo == 'I D' ~ 'grey',
+                                          PartyCombo == 'R I' ~ 'grey'))
+
+g_pos_networks[[44]] <- set_edge_attr(g_pos_networks[[44]], 'Col', value = temp$Col)
+
+V(g_pos_networks[[44]])[Party == 'D']$color <- "blue"
+V(g_pos_networks[[44]])[Party == 'R']$color <- "red"
+V(g_pos_networks[[44]])[Party == 'I']$color <- "purple"
+
+
+plot(g_pos_networks[[44]], vertex.label = NA, layout = layout.fruchterman.reingold, vertex.size = 1, main = 'Positive Connections by Party', edge.color = adjustcolor(E(g_pos_networks[[44]])$Col, alpha.f = .15))
+```
+
+
+
+
+```{r}
+V(g_pos_networks[[34]])[Party == 'D']$color <- "blue"
+V(g_pos_networks[[34]])[Party == 'R']$color <- "red"
+V(g_pos_networks[[34]])[Party == 'I']$color <- "purple"
+plot(g_pos_networks[[34]], layout = layout_nicely, vertex.label = NA, main = 'Positive Connections by Party')
+```
+
+
+
+GENERAL NETWORK PROPERTIES
+
+COMPUTE DEGREE AND ASSORTATIVITY MEASURES OVER TIME BROKEN DOWN BY PARTY
+```{r}
+pos_degree_r <- c()
+pos_degree_d <- c()
+neg_degree_r <- c()
+neg_degree_d <- c()
+pos_assort_r <- c()
+pos_assort_d <- c()
+neg_assort_r <- c()
+neg_assort_d <- c()
+
+for (i in seq_along(g_pos_networks)){
+  pos_degree_r[[i]] <- degree(g_pos_networks[[i]], (V(g_pos_networks[[i]])$Party == 'R'))
+  pos_degree_d[[i]] <- degree(g_pos_networks[[i]], (V(g_pos_networks[[i]])$Party == 'D'))
+  pos_assort_r[[i]] <- assortativity_nominal(g_pos_networks[[i]], (V(g_pos_networks[[i]])$Party == 'R')+1)
+  pos_assort_d[[i]] <- assortativity_nominal(g_pos_networks[[i]], (V(g_pos_networks[[i]])$Party == 'D')+1)
+}
+
+for (i in seq_along(g_neg_networks)){
+  neg_degree_r[[i]] <- degree(g_neg_networks[[i]], (V(g_neg_networks[[i]])$Party == 'R'))
+  neg_degree_d[[i]] <- degree(g_neg_networks[[i]], (V(g_neg_networks[[i]])$Party == 'D'))
+  neg_assort_r[[i]] <- assortativity_nominal(g_neg_networks[[i]], (V(g_neg_networks[[i]])$Party == 'R')+1)
+  neg_assort_d[[i]] <- assortativity_nominal(g_neg_networks[[i]], (V(g_neg_networks[[i]])$Party == 'D')+1)
+}
+```
+
+
+```{r}
+par(mfrow=c(1,2))
+# Starting year of the session
+Session_Starting_Year <- c(1973, 1975, 1977, 1979, 1981, 1983, 1985, 1987, 1989, 1991, 1993, 1995, 1997, 1999, 2001, 2003, 2005, 2007, 2009, 2011, 2013, 2015)
+
+plot(Session_Starting_Year, lapply(lapply(g_neg_networks[23:44], degree), sum), col = "orange", type="l", lwd = 2.5, ylim=c(0,6000),
+     main = 'Degree of Senate Over Time', ylab = 'Network Degree')
+lines(Session_Starting_Year, lapply(lapply(g_pos_networks[23:44], degree), sum), col = "black", lwd = 2.5)
+
+legend(x = "topleft", legend = c('Negative', 'Positive'), pch = 19, col = c("orange", "black"), title = "Relationship Type")
+
+plot(Session_Starting_Year, lapply(lapply(g_neg_networks[1:22], degree), sum), col = "orange", type="l", lwd = 2.5, ylim=c(10000,100000),
+     main = 'Degree of House Over Time', ylab = 'Network Degree')
+lines(Session_Starting_Year, lapply(lapply(g_pos_networks[1:22], degree), sum), col = "black", lwd = 2.5)
+```
+
+
+```{r}
+par(mfrow = c(2,2))
+
+# House: Positive and Negative Relationships
+boxplot(lapply(g_pos_networks[1:22], degree), main = 'Positive Relationship Degree - House')
+lines(1:22, lapply(pos_degree_r[1:22], mean), col = "red", lwd = 2.5)
+lines(1:22, lapply(pos_degree_d[1:22], mean), col = "blue", lwd = 2.5)
+
+boxplot(lapply(g_neg_networks[1:22], degree), main = 'Negative Relationship Degree - House')
+lines(1:22, lapply(neg_degree_r[1:22], mean), col = "red", lwd = 2.5)
+lines(1:22, lapply(neg_degree_d[1:22], mean), col = "blue", lwd = 2.5)
+
+# Senate: Positive and Negative Relationships
+boxplot(lapply(g_pos_networks[23:44], degree), main = 'Positive Relationship Degree - Senate')
+lines(1:22, lapply(pos_degree_r[23:44], mean), col = "red", lwd = 2.5)
+lines(1:22, lapply(pos_degree_d[23:44], mean), col = "blue", lwd = 2.5)
+
+boxplot(lapply(g_neg_networks[23:44], degree), main = 'Negative Relationship Degree - Senate')
+lines(1:22, lapply(neg_degree_r[23:44], mean), col = "red", lwd = 2.5)
+lines(1:22, lapply(neg_degree_d[23:44], mean), col = "blue", lwd = 2.5)
+```
+
+LOOKING AT TRENDS IN ASSORTATIVITY
+
+```{r}
+par(mfrow = c(2,2))
+
+# Plot Positive Relationships by party for the House 
+plot(Session_Starting_Year, unlist(pos_assort_r[1:22]), type="l",col="red", ylab = 'Assortativity Coefficient', main = 'Positive Relationship Assortativity by Party Over Time in the House')
+lines(Session_Starting_Year, unlist(pos_assort_d[1:22]), col = "blue")
+
+# Plot Positive Relationships by party for the Senate
+plot(Session_Starting_Year, unlist(pos_assort_r[23:44]),type="l",col="red", ylab = 'Assortativity Coefficient', main = 'Positive Relationship Assortativity by Party Over Time in the Senate')
+lines(Session_Starting_Year, unlist(pos_assort_d[23:44]), col = "blue")
+
+# Plot Negative Relationships by party for the House 
+plot(Session_Starting_Year, unlist(neg_assort_r[1:22]),type="l",col="red", ylab = 'Assortativity Coefficient', main = 'Negative Relationship Assortativity by Party Over Time in the House')
+lines(Session_Starting_Year, unlist(neg_assort_d[1:22]), col = "blue")
+
+# Plot Negative Relationships by party for the Senate
+plot(Session_Starting_Year, unlist(neg_assort_r[23:44]),type="l",col="red", ylab = 'Assortativity Coefficient', main = 'Negative Relationship Assortativity by Party Over Time in the Senate')
+lines(Session_Starting_Year, unlist(neg_assort_d[23:44]), col = "blue")
+```
+
+
+
+```{r}
+par(mfrow = c(1,2))
+
+# Plot Positive Relationships by party for the Senate
+plot(rep(93:114), unlist(pos_assort_r[23:44]),type="l",col="red",
+     ylab = 'Assortativity Coefficient',
+     main = 'Positive Relationship Assortativity by Party Over Time in the Senate',
+     xlab = 'Congressional Session')
+lines(rep(93:114), unlist(pos_assort_d[23:44]), col = "blue")
+
+legend(x = "topleft", legend = c('Republican', 'Democrat'),
+       pch = 19,
+       col = c("red", "blue"),
+       title = "Political Party")
+
+# Plot Negative Relationships by party for the Senate
+plot(rep(93:114), unlist(neg_assort_r[23:44]),type="l",col="red",
+     ylab = 'Assortativity Coefficient',
+     main = 'Negative Relationship Assortativity by Party Over Time in the Senate',
+     xlab = 'Congressional Session')
+lines(rep(93:114), unlist(neg_assort_d[23:44]), col = "blue")
+```
+
+
+
+
+#Longitudinal Modeling ------
+
+```{r}
+# Community Detection
+blocks_pos <- c()
+blocks_neg <- c()
+
+for (i in seq_along(g_pos_networks)){
+  blocks_pos[[i]] <- cluster_fast_greedy(g_pos_networks[[i]])
+}
+
+for (i in seq_along(g_neg_networks)){
+  blocks_neg[[i]] <- cluster_fast_greedy(g_neg_networks[[i]])
+}
+```
+
+
+```{r}
+# Degree Corrected Stochastic Block Model using randnet: https://cran.r-project.org/web/packages/randnet/randnet.pdf
+
+# Need an adjacency matrix
+g_pos_adj_matrices <- lapply(g_pos_networks, as_adjacency_matrix)
+g_neg_adj_matrices <- lapply(g_neg_networks, as_adjacency_matrix)
+
+# Empty vectors to store the degree-corrected stochastic block models
+dcsbm_pos_networks <- c()
+dcsbm_neg_networks <- c()
+
+# Pass in the adjacency matrix and the membership computed via cluster_fast_greedy
+for (i in seq_along(g_pos_adj_matrices)){
+  dcsbm_pos_networks[[i]] <- DCSBM.estimate(g_pos_adj_matrices[[i]], blocks_pos[[i]]$membership)
+}
+
+for (i in seq_along(g_neg_adj_matrices)){
+  dcsbm_neg_networks[[i]] <- DCSBM.estimate(g_neg_adj_matrices[[i]], blocks_neg[[i]]$membership)
+}
+```  
+
+
+```{r}
+plot(blocks_pos[[34]], g_pos_networks[[34]], vertex.label = vertex_attr(g_pos_networks[[34]])$Party, main = 'Positive Relationship - Clusters')
+```
+
+Remove Isolated Nodes for easier to interpret Community Detection Results
+```{r}
+# If we want to remove the isolated nodes so they are not each their own community, one way is to manually remove them.
+
+# First, identify them and create a vector to store them
+Pos_Isolateds <- c()
+Neg_Isolateds <- c()
+
+for (i in seq_along(g_pos_networks)){
+  Pos_Isolateds[[i]] <- which(degree(g_pos_networks[[i]]) == 0)
+}
+
+for (i in seq_along(g_neg_networks)){
+  Neg_Isolateds[[i]] <- which(degree(g_neg_networks[[i]]) == 0)
+}
+
+# Then we create a new vector of networks by removing the isolated nodes
+g_pos_networks_connected <- c()
+g_neg_networks_connected <- c()
+
+for (i in seq_along(g_pos_networks)){
+  g_pos_networks_connected[[i]] <- igraph::delete.vertices(g_pos_networks[[i]], Pos_Isolateds[[i]])
+}
+
+for (i in seq_along(g_neg_networks)){
+  g_neg_networks_connected[[i]] <- igraph::delete.vertices(g_neg_networks[[i]], Neg_Isolateds[[i]])
+}
+
+# Run community detection on connected blocks
+connected_blocks_pos <- c()
+connected_blocks_neg <- c()
+
+for (i in seq_along(g_pos_networks_connected)){
+  connected_blocks_pos[[i]] <- cluster_fast_greedy(g_pos_networks_connected[[i]])
+}
+
+for (i in seq_along(g_neg_networks_connected)){
+  connected_blocks_neg[[i]] <- cluster_fast_greedy(g_neg_networks_connected[[i]])
+}
+```
+
+
+
+```{r}
+plot(connected_blocks_pos[[34]], g_pos_networks_connected[[34]], vertex.label = vertex_attr(g_pos_networks_connected[[34]])$Party, main = 'Positive Relationship - Clusters')
+```
+
+DEGREE-CORRECTED SBM USING DETECTED COMMUNITIES
+```{r}
+# Degree Corrected Stochastic Block Model on connected networks using randnet: https://cran.r-project.org/web/packages/randnet/randnet.pdf
+
+# Need an adjacency matrix
+g_pos_connected_adj_matrices <- lapply(g_pos_networks_connected, as_adjacency_matrix)
+g_neg_connected_adj_matrices <- lapply(g_neg_networks_connected, as_adjacency_matrix)
+
+# Empty vectors to store the degree-corrected stochastic block models
+dcsbm_pos_connected_networks <- c()
+dcsbm_neg_connected_networks <- c()
+
+# Pass in the adjacency matrix and the membership computed via cluster_fast_greedy
+for (i in seq_along(g_pos_connected_adj_matrices)){
+  dcsbm_pos_connected_networks[[i]] <- DCSBM.estimate(g_pos_connected_adj_matrices[[i]], connected_blocks_pos[[i]]$membership)
+}
+
+for (i in seq_along(g_neg_connected_adj_matrices)){
+  dcsbm_neg_connected_networks[[i]] <- DCSBM.estimate(g_neg_connected_adj_matrices[[i]], connected_blocks_neg[[i]]$membership)
+}
+```  
+
+
+
+```{r}
+# Create copy of the connected networks and then reassign the Party attribute from D, R, I, or other to 1,2,3,4 so that we can pass this to the DCSBM.estimate() function
+pos_party_labels <- g_pos_networks_connected
+neg_party_labels <- g_neg_networks_connected
+
+
+for (i in 1:44){
+  V(pos_party_labels[[i]])$Party[V(pos_party_labels[[i]])$Party == 'D'] <- 1
+  V(pos_party_labels[[i]])$Party[V(pos_party_labels[[i]])$Party == 'R'] <- 2
+  V(pos_party_labels[[i]])$Party[V(pos_party_labels[[i]])$Party == 'I'] <- 3
+  V(pos_party_labels[[i]])$Party[!(V(pos_party_labels[[i]])$Party %in% c(1, 2, 3))] <- 4
+  V(neg_party_labels[[i]])$Party[V(neg_party_labels[[i]])$Party == 'D'] <- 1
+  V(neg_party_labels[[i]])$Party[V(neg_party_labels[[i]])$Party == 'R'] <- 2
+  V(neg_party_labels[[i]])$Party[V(neg_party_labels[[i]])$Party == 'I'] <- 3
+  V(neg_party_labels[[i]])$Party[!(V(neg_party_labels[[i]])$Party %in% c(1, 2, 3))] <- 4
+  
+}
+```
+
+
+
+DEGREE-CORRECTED SBM USING POLITICAL PARTY AS COMMUNITIES
+```{r}
+# Degree Corrected Stochastic Block Model on connected networks using Party as the community using randnet: https://cran.r-project.org/web/packages/randnet/randnet.pdf
+
+# Create copy of the connected networks and then reassign the Party attribute from D, R, I, or other to 1,2,3,4 so that we can pass this to the DCSBM.estimate() function
+pos_party_labels <- g_pos_networks_connected
+neg_party_labels <- g_neg_networks_connected
+
+
+for (i in 1:44){
+  V(pos_party_labels[[i]])$Party[V(pos_party_labels[[i]])$Party == 'D'] <- 1
+  V(pos_party_labels[[i]])$Party[V(pos_party_labels[[i]])$Party == 'R'] <- 2
+  V(pos_party_labels[[i]])$Party[V(pos_party_labels[[i]])$Party == 'I'] <- 3
+  V(pos_party_labels[[i]])$Party[!(V(pos_party_labels[[i]])$Party %in% c(1, 2, 3))] <- 4
+  V(neg_party_labels[[i]])$Party[V(neg_party_labels[[i]])$Party == 'D'] <- 1
+  V(neg_party_labels[[i]])$Party[V(neg_party_labels[[i]])$Party == 'R'] <- 2
+  V(neg_party_labels[[i]])$Party[V(neg_party_labels[[i]])$Party == 'I'] <- 3
+  V(neg_party_labels[[i]])$Party[!(V(neg_party_labels[[i]])$Party %in% c(1, 2, 3))] <- 4
+}
+
+# Empty vectors to store the degree-corrected stochastic block models
+dcsbm_party_pos_connected_networks <- c()
+dcsbm_party_neg_connected_networks <- c()
+
+# Pass in the adjacency matrix and the membership determined by party membership (vector of numbers instead of 'D', 'R', etc because DCSBM.estiate needs numeric values)
+for (i in seq_along(g_pos_connected_adj_matrices)){
+  dcsbm_party_pos_connected_networks[[i]] <- DCSBM.estimate(g_pos_connected_adj_matrices[[i]], V(pos_party_labels[[i]])$Party)
+}
+
+for (i in seq_along(g_neg_connected_adj_matrices)){
+  dcsbm_party_neg_connected_networks[[i]] <- DCSBM.estimate(g_neg_connected_adj_matrices[[i]], V(neg_party_labels[[i]])$Party)
+}
+
+```
+
+
+
+```{r}
+# Create a function to convert log-likelihoods to probabilities to make the output of dcsbm.estimate() more understandable
+logit2prob <- function(logit){
+  odds <- exp(logit)
+  prob <- odds / (1 + odds)
+  return(prob)
+}
+```
+
+
+```{r}
+# Store a list of the probability matrices from dcsbm models in a list because printing directly doesn't work when using the logit2 prob because the logit2prob function returns NaN when the log-likelihood is very high (roughly > 800). So we store the list and then replace all NaN values with 1, then plot these probability matrices later
+
+b_prob_mat_pos <- c()
+b_prob_mat_neg <- c()
+b_prob_party_mat_pos <- c()
+b_prob_party_mat_neg <- c()
+
+for (i in 1:44){
+  b_prob_mat_pos[[i]] <- logit2prob(dcsbm_pos_connected_networks[[i]]$B)
+  b_prob_mat_neg[[i]] <- logit2prob(dcsbm_pos_connected_networks[[i]]$B)
+  b_prob_party_mat_pos[[i]] <- logit2prob(dcsbm_party_pos_connected_networks[[i]]$B)
+  b_prob_party_mat_neg[[i]] <- logit2prob(dcsbm_party_pos_connected_networks[[i]]$B)
+}
+
+for (i in 1:44){
+  b_prob_mat_pos[[i]][b_prob_mat_pos[[i]] == 'NaN'] <- 1.00000
+  b_prob_mat_neg[[i]][b_prob_mat_neg[[i]] == 'NaN'] <- 1.00000
+  b_prob_party_mat_pos[[i]][b_prob_party_mat_pos[[i]] == 'NaN'] <- 1.00000
+  b_prob_party_mat_neg[[i]][b_prob_party_mat_neg[[i]] == 'NaN'] <- 1.00000
+}
+```
+
+
+
+```{r}
+par(mfrow = c(4,4))
+for (i in 1:16){
+  #image.plot(logit2prob(dcsbm_pos_connected_networks[[i]]$B))
+  image.plot(b_prob_party_mat_pos[[i]])
+}
+```
+
+
+
+
+
+COUNT OF COLUMNS IN THE TABLES OF POSITIVE CONNECTIONS THAT SHOW A CONTINGENCY TABLE OF PARTY AND DETECTED COMMUNITY THAT HAVE MORE THAN 1 NON-ZERO VALUE TO SHOW COMMUNITIES THAT INCLUDE MEMBERS OF MORE THAN 1 POLITICAL PARTY
+```{r}
+table(vertex_attr(g_pos_networks_connected[[34]])$Party, connected_blocks_pos[[34]]$membership)
+
+colSums(table(vertex_attr(g_pos_networks_connected[[34]])$Party, connected_blocks_pos[[34]]$membership) != 0) > 1
+```
+FALSE = 1 party, TRUE = more than 1 party
+
+```{r}
+vertex_attr(g_pos_networks[[34]])$name[connected_blocks_pos[[34]]$membership == 4]
+```
+
+
+CREATE THE PARTY-COMMUNITY TABLES FOR EVERY SESSION
+```{r}
+party_community_tables <- c()
+
+for (i in seq_along(g_pos_networks_connected)){
+  party_community_tables[[i]] <- table(vertex_attr(g_pos_networks_connected[[i]])$Party, connected_blocks_pos[[i]]$membership)
+}
+```
+
+
+CREATE A FUNCTION TO CALCULATE THE COLUMNSUMS AND THEN GET THE PROPORTION OF COMMUNITIES WITH MORE THAN 1 PARTY COMPARED TO TOTAL NUMBER OF COMMUNITIES
+```{r}
+calculate_crossparty_proportion <- function(tables){
+  columnsums <- colSums(tables != 0)
+  prop <- length(columnsums[columnsums > 1])/length(columnsums)
+  return(prop)
+}
+```
+
+PLOT THE PROPORTION OF COMMUNITIES WITH MULTIPLE PARTIES BY SENATE SESSION
+```{r}
+#par(mfrow = c(1,2))
+
+plot(Session_Starting_Year, unlist(lapply(party_community_tables, FUN = calculate_crossparty_proportion), use.names = FALSE)[23:44], 
+     ylab = 'Proportion of Communities with Multi-Party Membership', 
+     main = 'Proportion of Communities that Contain More than 1 Political Party', type = 'l', col = 'orange', lwd = 2, ylim = c(.15, 1.15))
+lines(Session_Starting_Year, unlist(lapply(party_community_tables, FUN = calculate_crossparty_proportion), use.names = FALSE)[1:22], col = 'dodgerblue', lwd = 2)
+legend(x = "topleft", legend = c('Senate', 'House'), pch = 19, col = c("orange", "dodgerblue"), title = "Congressional Body")
+```
+
+
+SELECT COMMUNITIES TWO LARGEST COMMUNITIES FOR EACH SESSION, THEN SHOW % OF R & % OF D
+```{r}
+# Function that takes in a contingency table, keeps the two largest communities (columns in the table), renames the communities to 1 and 2, extracts the political 
+calculate_largest_communities <- function(tables){
+  # Sort table by columnsums (number of nodes in a community) and keep only the top two
+  tables <- tables[, names(sort(desc(colSums(prop.table(tables)))))[1:2]]
+  colnames(tables) <- c(1,2)
+  
+  # Extract the rowname (political party) with the highest value in column 1 - that is the dominant political party for that community (column) 
+  mainparty_community1 <- names(sort(desc(tables[,1])))[1]
+  # Extract the rowname (political party) with the highest value in column 2 - that is the dominant political party for that community (column) 
+  mainparty_community2 <- names(sort(desc(tables[,2])))[1]
+
+  # Turn table into df
+  table_dfs <- as.data.frame(tables)
+  
+  # Remove non Democrat and non Republican members
+  table_dfs <- table_dfs %>% subset(Var1 %in% c('D', 'R'))
+  table_dfs$Var1 <- factor(table_dfs$Var1)
+  
+  # Calculate a proportion from the Frequency counts
+  table_dfs <- table_dfs %>% mutate(Prop = round(Freq/sum(Freq), 3))
+  table_dfs$MainPartyCommunity <- '.'
+  table_dfs$MainPartyCommunity[table_dfs$Var2 == 1] <- mainparty_community1
+  table_dfs$MainPartyCommunity[table_dfs$Var2 == 2] <- mainparty_community2
+  return(table_dfs)
+}
+
+# Store vector of dataframes showing number of Ds and Rs in the two'largest'
+d_r_prop_tables <- c()
+
+# Loop through each of the party_community_tables and apply the function above and store results in the d_r_prop_tables
+for (i in seq_along(party_community_tables)){
+  d_r_prop_tables[[i]] <- calculate_largest_communities(party_community_tables[[i]])
+}
+
+# Convert list of dataframes into 1 dataframe and include .id = 'Session' so we know what list(session) the data is from
+party_community_df <- bind_rows(d_r_prop_tables, .id = 'Session')
+```
+
+Number of nodes that fit in the two largest communities per session. We can see that in the earlier sessions of the senate, only about 70% are included in the two largest communities, while later on almost every single node is included in the two largest communities.
+387
+391
+421
+406
+406
+414
+412
+422
+417
+382
+418
+419
+422
+434
+436
+430
+433
+442
+419
+435
+437
+435
+72
+73
+73
+67
+63
+61
+71
+71
+81
+75
+73
+91
+94
+97
+92
+87
+85
+97
+101
+93
+102
+97
+
+```{r}
+# Get the maximum Freq when comparing the session and community.
+party_community_df <- party_community_df %>% group_by(Session, Var2) %>% mutate(dom = max(Freq))
+
+# Create new column which should have the label of the dominant party in a specific Session-Community. Then we can label communities as 'Repub' or 'Dem' instead of 1 and 2 which sometimes are R-dominated and othertimes D-dominates
+party_community_df <- party_community_df %>% group_by(Session, Var2) %>% mutate(mainparty = ifelse(dom == Freq, as.character(Var1), 'ignore'))
+party_community_df <- party_community_df %>% group_by(Session, Var2) %>% mutate(Percentage = Freq/sum(Freq))
+
+# Change Factors to Character, Character to Numeric for area plotting
+party_community_df$Session <- as.numeric(party_community_df$Session)
+party_community_df$Var1 <- as.character(party_community_df$Var1)
+
+# Ggplot was having issues with the tibble, so converting to dataframe
+party_community_df <- data.frame(party_community_df)
+
+# Changing Variable Names and Values for interpretation purposes
+names(party_community_df)[names(party_community_df) == "Var1"] <- "Political Party"
+party_community_df$`Political Party`[party_community_df$`Political Party` == 'D'] <- 'Democrat'
+party_community_df$`Political Party`[party_community_df$`Political Party` == 'R'] <- 'Republican'
+
+# Remove any sessions in which one party dominated both communities for the sake of the visualization below
+party_community_df <- party_community_df %>% group_by(Session) %>% mutate('1partydom' = length(unique(mainparty)))
+party_community_df <- party_community_df %>% group_by(Session) %>% subset(`1partydom` > 2)
+```
+
+
+```{r}
+# Show Percentage of Ds and Rs in the House for the D-dominated Community and R-dominated Community Over time. Ignoring session 2 because both communities were D-dominated
+#ggplot(party_community_df[party_community_df$Session %in% c(1, 3:22), ], aes(x = Session, y = Percentage, fill = `Political Party`)) +
+
+seshs <- party_community_df[party_community_df$Session <= 22, ]$Session
+
+ggplot(party_community_df[party_community_df$Session <= 22, ], aes(x = Session, y = Percentage, fill = `Political Party`)) +
+    
+  geom_area(alpha=0.85, size = 1) + 
+  
+  facet_wrap(~MainPartyCommunity, 
+             labeller = as_labeller(c('D' = 'Democrat-Dominated Community', 'R' = 'Republican-Dominated Community'))) + 
+  
+  scale_fill_manual(values = c("blue", "red")) + 
+  
+  ggtitle('Trends in Polarization in the U.S. House of Representatives\nEvolution of the Distribution of Political Party Membership in Detected Communities') +
+  
+  ylab("Percentage of Total Community Membership by Party") +
+  
+  xlab("Congressional Session") +
+  
+  theme_economist() +
+  
+  scale_color_economist() +
+
+  scale_x_continuous(breaks=rep(1:length(unique(seshs))),
+        labels = rep(93:114)[unique(seshs)]) +
+  
+  theme(axis.title.y = element_text(size = 16, angle = 90), 
+        axis.text.y = element_text(size = 13, margin = margin(r = 0)),
+        axis.title.x = element_text(size = 16),
+        axis.text.x = element_text(size = 13, angle = 45, hjust = -.05),
+        legend.title = element_text(size = 16),
+        legend.box.margin = margin(6),
+        legend.background = element_rect(fill = "lightgray"),
+        plot.title = element_text(hjust = 0.5),
+        panel.grid.major = element_blank(),
+        panel.spacing = unit(0, "mm"))
+```
+
+
+
+
+```{r}
+# Show Percentage of Ds and Rs in the Senate for the D-dominated Community and R-dominated Community Over time. Ignoring session 26 because both communities were D-dominated
+
+seshs <- party_community_df[party_community_df$Session >= 23, ]$Session
+
+# used later to get the unique senate sessions that were included in the plot
+seshs <- seshs-22
+
+ggplot(party_community_df[party_community_df$Session >= 23, ], aes(x = seshs, y = Percentage, fill = `Political Party`)) + 
+  
+  geom_area(alpha = .85, size = 1) + facet_wrap(~MainPartyCommunity) + 
+    
+  facet_wrap(~MainPartyCommunity, 
+             labeller = as_labeller(c('D' = 'Community One (Democrat-Dominated)', 'R' = 'Community Two (Republican-Dominated)'))) + 
+  
+  scale_fill_manual(values = c("blue", "red")) + 
+  
+  ggtitle('Polarization in the U.S. Senate\nTrends in Political Party Membership in Two Detected Communities') +
+  
+  ylab("Percentage of Total Community Membership by Party") +
+  
+  xlab("Senate Session") +
+  
+  theme_economist() +
+  
+  scale_color_economist() +
+  
+  scale_x_continuous(breaks=rep(1:length(unique(seshs))),
+        labels = rep(93:114)[unique(seshs)]) +
+  
+  theme(axis.title.y = element_text(size = 16, angle = 90), 
+        axis.text.y = element_text(size = 13, margin = margin(r = 0)),
+        axis.title.x = element_text(size = 16),
+        axis.text.x = element_text(size = 13, angle = 45, hjust = -.05),
+        legend.title = element_text(size = 16),
+        legend.box.margin = margin(6),
+        legend.background = element_rect(fill = "lightgray"),
+        plot.title = element_text(hjust = 0.5),
+        panel.grid.major = element_blank(),
+        panel.spacing = unit(0, "mm"))
+
+```
+
+
+
+
+
+
+
+
+
+
+LINEAR REGRESSION: REGRESSING NUMBER OF COMMUNITIES DETECTED ON SESSION
+```{r}
+#Calculate the number of clusters for positive connections on the connected graphs
+clusters <- c()
+for (i in 1:length(connected_blocks_pos)){
+  clusters[[i]] <- length(communities(connected_blocks_pos[[i]]))
+}
+
+# Calculate the number of vertices in each graph so we can distinguish Congress from Senate
+vertices <- c()
+for (i in seq_along(g_pos_networks_connected)){
+  vertices[[i]] <- length(V(g_pos_networks_connected[[i]]))
+}
+
+# Turn the list of cluster values into a vector for plotting
+clusters <- unlist(clusters, use.names = FALSE)
+```
+
+POISSON INSTEAD OF OLS
+```{r}
+# Plot the number of communities/clusters for each senate (higher X is more recent Senate)
+senate_fit <- lm(clusters[23:44] ~ c(1:22))
+
+plot(c(1:22), clusters[23:44], xlab = 'Senate Session', ylab = 'Number of Communities Detected', main = 'Regressing Number of Communities Detected on Senate Session\nHigher Value of Session Implies More Recent')
+
+axis(side = 1, at = c(1:22), labels= c(93:114))
+
+abline(senate_fit,col="red")
+```
+
+
+```{r}
+# Plot the number of communities/clusters for each congress (higher X is more recent congress)
+congress_fit <- lm(clusters[1:22] ~ rep(1:22))
+
+plot(c(1:22), clusters[1:22],xlab = 'Congressional Session', ylab = 'Number of Communities Detected', main = 'Regressing Number of Communities Detected on Congressional Session\nHigher Value of Session Implies More Recent')
+
+axis(side = 1, at = c(1:22), labels= c(93:114))
+
+abline(congress_fit,col="red")
+```
+
+
+```{r}
+summary(senate_fit)
+```
+For each new Senate Session, the number of communities detected decreases by .11, significant at the .01 level. Fewer communities could be a proxy for polarization, in which communities that existed outside the bounds of pure party affiliation are dissolved and are drawn into one of the two parties.
+
+
+```{r}
+summary(congress_fit)
+```
+For each new Congress Session, the number of communities detected decreases by .14,significant at the .001 level. Fewer communities could be a proxy for polarization, in which communities that existed outside the bounds of pure party affiliation are dissolved and are drawn into one of the two parties.
+
+
+#Longitudinal Modeling Part 3 ------
+
+ERGM Modeling - 93 - 114th
+
+```{r}
+# ERGM models for the longitudial study
+# Do this and report the EXPIT for the summaries of each of edges v party
+# General Positive ####
+
+ML1 <- list(c())
+X <- 1
+for (i in g_pos_networks[23:44]) {
+  g_p_net.ergm <- network(as.matrix(as_adjacency_matrix(i)))
+  set.vertex.attribute(g_p_net.ergm,"Party",vertex.attributes(i)$Party)
+  set.vertex.attribute(g_p_net.ergm,"State",vertex.attributes(i)$State)
+  set.vertex.attribute(g_p_net.ergm,"Name",vertex.attributes(i)$name)
+  ML1[[X]] <- ergm(g_p_net.ergm ~ edges + match("Party"), 
+                 control = control.ergm(MCMC.burnin = 5000, 
+                                        MCMC.interval =  10,
+                                        MCMLE.maxit = 10))
+  X <- X + 1
+}
+
+ML1.Edges <- c()
+ML1.Edges.Party <- c()
+X <- 1
+for (i in ML1) {
+  ML1.Edges[X] <- expit(i$coef[1])
+  ML1.Edges.Party[X] <- expit(i$coef[1] + i$coef[2])
+  X <- X + 1
+}
+
+plot(c(1:22),ML1.Edges.Party) # Include Graphic
+plot(c(1:22),ML1.Edges)
+
+ML1.1 <- list(c())
+X <- 1
+for (i in g_pos_networks[23:44]) {
+  g_p_net.ergm <- network(as.matrix(as_adjacency_matrix(i)))
+  set.vertex.attribute(g_p_net.ergm,"Party",vertex.attributes(i)$Party)
+  set.vertex.attribute(g_p_net.ergm,"State",vertex.attributes(i)$State)
+  set.vertex.attribute(g_p_net.ergm,"Name",vertex.attributes(i)$name)
+  ML1.1[[X]] <- ergm(g_p_net.ergm ~ edges + match("Party") + match("State"), 
+                 control = control.ergm(MCMC.burnin = 5000, 
+                                        MCMC.interval =  10,
+                                        MCMLE.maxit = 10))
+  X <- X + 1
+}
+
+# General Negative ####
+ML2 <- list(c())
+X <- 1
+for (i in g_neg_networks[23:44]) {
+  g_p_net.ergm <- network(as.matrix(as_adjacency_matrix(i)))
+  set.vertex.attribute(g_p_net.ergm,"Party",vertex.attributes(i)$Party)
+  set.vertex.attribute(g_p_net.ergm,"State",vertex.attributes(i)$State)
+  set.vertex.attribute(g_p_net.ergm,"Name",vertex.attributes(i)$name)
+  ML2[[X]] <- ergm(g_p_net.ergm ~ edges + match("Party"), 
+                 control = control.ergm(MCMC.burnin = 5000, 
+                                        MCMC.interval =  10,
+                                        MCMLE.maxit = 10))
+  X <- X + 1
+}
+
+ML2.Edges <- c()
+ML2.Edges.Party <- c()
+X <- 1
+for (i in ML2) {
+  ML2.Edges[X] <- expit(i$coef[1])
+  ML2.Edges.Party[X] <- expit(i$coef[1] + i$coef[2])
+  X <- X + 1
+}
+
+plot(c(1:22),ML2.Edges.Party) # Include Graphic
+plot(c(1:22),ML2.Edges)
+
+ML2.1 <- list(c())
+X <- 1
+for (i in g_neg_networks[23:44]) {
+  g_p_net.ergm <- network(as.matrix(as_adjacency_matrix(i)))
+  set.vertex.attribute(g_p_net.ergm,"Party",vertex.attributes(i)$Party)
+  set.vertex.attribute(g_p_net.ergm,"State",vertex.attributes(i)$State)
+  set.vertex.attribute(g_p_net.ergm,"Name",vertex.attributes(i)$name)
+  ML2.1[[X]] <- ergm(g_p_net.ergm ~ edges + match("Party") + match("State"), 
+                 control = control.ergm(MCMC.burnin = 5000, 
+                                        MCMC.interval =  10,
+                                        MCMLE.maxit = 10))
+  X <- X + 1
+}
+
+par(mfrow=c(2,2))
+plot(c(93:114),ML1.Edges.Party, main = "Estimated Probability of Connecting", sub = "Positive Graph", xlab = "Senate Sessions", ylab = "Probability") # Include Graphic
+plot(c(93:114),ML2.Edges.Party, main = "Estimated Probability of Connecting", sub = "Negative Graph", xlab = "Senate Sessions", ylab = "Probability") # Include Graphic
+par(mfrow=c(1,2))
+```
+
+
+#Validation - Comparing Community Detection Algorithms ------
+
+== == == == == == == == == == == == == == == =
+Comparison of Community Detection Algorithms
+== == == == == == == == == == == == == == == =
+
+1. Count the number of communities detected by each algo, compare visually
+
+2. Use the Compare() function to compare each algorithm
+ a. Will need to look across comparisons (algo1 ~ algo2) vs (algo1 ~ algo3)
+ b. Need to decide on the method of comparison (vi, nmi, splitjoin, etc.)
+  i. Use the method with the least amount of variation in comparison scores
+   ai. Look at the mean variance in the correlation matrices of comparison scores and select method with lowest mean variance in correlation matrix
+ c. Once the method is determined, compute the mean comparison score (sum across each network) using the determined method
+ d. For each algorithm, add up the mean comparison scores for every comparison it is involved in
+ e. Select the algorithm with the highest value of mean comparison scores
+
+
+
+```{r}
+# Comparing Community Detection Algorithms. Might be helpful: https://www.nature.com/articles/srep30750
+
+# Seven Different community Detection Algorithms, cs doesn't work for unconnected network
+cfg <- cluster_fast_greedy(g_pos_networks[[34]])
+cim <- cluster_infomap(g_pos_networks[[34]])
+cl <- cluster_louvain(g_pos_networks[[34]])
+cwt <- cluster_walktrap(g_pos_networks[[34]])
+#cs <- cluster_spinglass(g_pos_networks[[34]])
+cle <- cluster_leading_eigen(g_pos_networks[[34]])
+ceb <- cluster_edge_betweenness(g_pos_networks[[34]])
+
+# Comparing the results
+compare(cfg, cim)
+compare(cfg, cl)
+compare(cim, cl)
+```
+
+
+```{r}
+# Comparing Community Detection Algorithms. Might be helpful: https://www.nature.com/articles/srep30750
+
+# Seven Different community Detection Algorithms, cluster_spinglass doesn't work for unconnected network
+
+# Loop through all positive connected networks and detect communities
+cfgs <- lapply(g_pos_networks_connected, cluster_fast_greedy)
+cims <- lapply(g_pos_networks_connected, cluster_infomap)
+cls <- lapply(g_pos_networks_connected, cluster_louvain)
+cwts <- lapply(g_pos_networks_connected, cluster_walktrap)
+
+# Long run times
+#css <- lapply(lapply(g_pos_networks_connected, cluster_spinglass), membership)
+#cles <- lapply(lapply(g_pos_networks_connected, cluster_leading_eigen), membership)
+#cebs <- lapply(lapply(g_pos_networks_connected, cluster_edge_betweenness), membership)
+```
+
+
+```{r}
+# Compare number of communities in each clustering algorithm
+par(mfrow = c(2,1))
+plot(Session_Starting_Year, lapply(lapply(lapply(cfgs[1:22], membership), unique), length), type = "l", col = "red", ylim = c(1,16), 
+     main = 'Number of Unique Communities Detected by Various Clustering Algorithms for the Positive Relationship Networks of the U.S. House of Representatives',
+     ylab = 'Number of Unique Communities',
+     xlab = 'Networks\nEach Network Corresponds to Congressional Session')
+lines(Session_Starting_Year, lapply(lapply(lapply(cims[1:22], membership), unique), length), col = "dodgerblue")
+lines(Session_Starting_Year, lapply(lapply(lapply(cls[1:22], membership), unique), length), col = "black")
+lines(Session_Starting_Year, lapply(lapply(lapply(cwts[1:22], membership), unique), length), col = "green")
+
+plot(Session_Starting_Year, lapply(lapply(lapply(cfgs[1:22], membership), unique), length), type = "l", col = "red", ylim = c(1,19), 
+     main = 'Number of Unique Communities Detected by Various Clustering Algorithms for the Positive Relationship Networks of the U.S. Senate',
+     ylab = 'Number of Unique Communities',
+     xlab = 'Networks\nEach Network Corresponds to Congressional Session')
+lines(Session_Starting_Year, lapply(lapply(lapply(cims[23:44], membership), unique), length), col = "dodgerblue")
+lines(Session_Starting_Year, lapply(lapply(lapply(cls[23:44], membership), unique), length), col = "black")
+lines(Session_Starting_Year, lapply(lapply(lapply(cwts[23:44], membership), unique), length), col = "green")
+```
+There is a decent amount of variation in just the number of communities that were detected by the various algorithms, especially for the House of Representatives (this makes sense since there are 435 nodes compared to 100 for the senate). For robust results on the polarization analyses, we would want these different clustering algorithms detect similar communities. 
+
+
+Let's look at how the different clustering algorithms look on an actual network - selecting network 31 because of the large spike in the number of communities in the walktrap algorithm
+```{r}
+n <- 5
+par(mfrow = c(2,2))
+
+# Pick a layout and store the coorindates, and use those coords to layout all the graphs so they have the same nodes in teh sample location
+coords <- layout_nicely(g_pos_networks_connected[[n]])
+
+plot(cfgs[[n]], g_pos_networks_connected[[n]], layout = coords, 
+     vertex.label = vertex_attr(g_pos_networks_connected[[n]])$Party,
+     main = 'Cluster Fast Greedy - Positive Relationship Network',
+     sub = 'This function tries to find dense subgraph,\nalso called communities in graphs via directly optimizing a modularity score.')
+plot(cims[[n]], g_pos_networks_connected[[n]], layout = coords,
+     vertex.label = vertex_attr(g_pos_networks_connected[[n]])$Party,
+     main = 'Infomap - Positive Relationship Network',
+     sub = 'Find community structure that minimizes the expected\n description length of a random walker trajectory')
+plot(cls[[n]], g_pos_networks_connected[[n]], layout = coords,
+     vertex.label = vertex_attr(g_pos_networks_connected[[n]])$Party,
+     main = 'Louvain - Positive Relationship Network',
+     sub = 'This function implements the multi-level modularity\noptimization algorithm for finding community structure.\nIt is based on the modularity measure and a hierarchial approach.')
+plot(cwts[[n]], g_pos_networks_connected[[n]], layout = coords, 
+     vertex.label = vertex_attr(g_pos_networks_connected[[n]])$Party,
+     main = 'Walktrap - Positive Relationship Network',
+     sub = 'This function tries to find densely connected subgraphs,\n also called communities in a graph via random walks.\nThe idea is that short random walks tend to stay in the same community.')
+```
+
+
+Let's use a more precise method of comparing the different algorithms, the compare() method
+```{r}
+# Which method should we choose for comparing?
+compare(cfgs[[31]], cls[[31]], method = 'vi')
+compare(cfgs[[31]], cls[[31]], method = 'nmi')
+compare(cfgs[[31]], cls[[31]], method = 'split.join')
+compare(cfgs[[31]], cls[[31]], method = 'rand')
+compare(cfgs[[31]], cls[[31]], method = 'adjusted.rand')
+```
+Each Method returns a different value, but we should compare these values on more than one network, and with each other over time to see if they are bounded between 0,1, and other properties.
+
+
+```{r}
+# Trash?
+Comparisons <- rep(rep(c('cfg-cim', 'cfg-cl', 'cfg-cwt', 'cim-cl', 'cim-cwt', 'cl-cwt'), 5), 44)
+Methods <- rep(rep(c('vi', 'nmi', 'split.join', 'rand', 'adjusted.rand'), each =  6), 44)
+
+
+cluster_comparisons_df <- data.frame(Comparisons, Methods) %>% separate(Comparisons, c("C1", "C2"), remove = FALSE)
+
+```
+
+
+COMPUTE A COMPARISON SCORE FOR EACH ALGORITHM USING EACH DIFFERENT METHOD (COMPARING CLUSTER FAST GREEDY TO INFOMAP USING RAND, ADJUSTED RAND, VI, NMI, AND SPLIT.JOIN METHODS)
+```{r}
+cfgs_cims <- list()
+cfgs_cls <- list()
+cfgs_cwts <- list()
+cims_cls <- list()
+cims_cwts <- list()
+cls_cwts <- list()
+
+final_cfgs_cims <- list()
+final_cfgs_cls <- list()
+final_cfgs_cwts <- list()
+final_cims_cls <- list()
+final_cims_cwts <- list()
+final_cls_cwts <- list()
+
+for (i in 1:44) {
+  for (j in c('vi', 'nmi', 'split.join', 'rand', 'adjusted.rand')) {
+    cfgs_cims[[j]] <- compare(cfgs[[i]], cims[[i]], method = j)
+    cfgs_cls[[j]] <- compare(cfgs[[i]], cls[[i]], method = j)
+    cfgs_cwts[[j]] <- compare(cfgs[[i]], cwts[[i]], method = j)
+    cims_cls[[j]] <- compare(cims[[i]], cls[[i]], method = j)
+    cims_cwts[[j]] <- compare(cims[[i]], cwts[[i]], method = j)
+    cls_cwts[[j]] <- compare(cls[[i]], cwts[[i]], method = j)
+  } 
+  final_cfgs_cims[[i]] <- cfgs_cims
+  final_cfgs_cls[[i]] <- cfgs_cls
+  final_cfgs_cwts[[i]] <- cfgs_cwts
+  final_cims_cls[[i]] <- cims_cls 
+  final_cims_cwts[[i]] <- cims_cwts
+  final_cls_cwts[[i]] <- cls_cwts
+}
+```
+
+
+
+
+FOR EACH NETWORK, PLOT OF SCORES FOR A CERTAIN METHOD FOR EACH OF THE COMPARISONS (CLUSTER FAST GREEDY VS INOFMAP, INFOMAP VS WALKTRAP, ETC)
+```{r}
+par(mfrow = c(5,1))
+
+# Plot all compare scores on the 'rand' method
+plot(c(1:44), map(final_cfgs_cims , ~.[["rand"]]), type = "l", ylab = 'Comparison Score', main = 'Comparison Scores using Rand Method', ylim = c(0,1))
+lines(c(1:44), map(final_cfgs_cls, ~.[["rand"]]), col = "red")
+lines(c(1:44), map(final_cfgs_cwts, ~.[["rand"]]), col = "dodgerblue")
+lines(c(1:44), map(final_cims_cls, ~.[["rand"]]), col = "green")
+lines(c(1:44), map(final_cims_cwts, ~.[["rand"]]), col = "orange")
+lines(c(1:44), map(final_cls_cwts, ~.[["rand"]]), col = "purple")
+
+# Plot all compare scores on the 'vi' method
+plot(c(1:44), map(final_cfgs_cims , ~.[["vi"]]), type = "l", ylab = 'Comparison Score', main = 'Comparison Scores using VI Method', ylim = c(0,2))
+lines(c(1:44), map(final_cfgs_cls, ~.[["vi"]]), col = "red")
+lines(c(1:44), map(final_cfgs_cwts, ~.[["vi"]]), col = "dodgerblue")
+lines(c(1:44), map(final_cims_cls, ~.[["vi"]]), col = "green")
+lines(c(1:44), map(final_cims_cwts, ~.[["vi"]]), col = "orange")
+lines(c(1:44), map(final_cls_cwts, ~.[["vi"]]), col = "purple")
+
+# Plot all compare scores on the 'nmi' method
+plot(c(1:44), map(final_cfgs_cims , ~.[["nmi"]]), type = "l", ylab = 'Comparison Score', main = 'Comparison Scores using NMI Method', ylim = c(0,1))
+lines(c(1:44), map(final_cfgs_cls, ~.[["nmi"]]), col = "red")
+lines(c(1:44), map(final_cfgs_cwts, ~.[["nmi"]]), col = "dodgerblue")
+lines(c(1:44), map(final_cims_cls, ~.[["nmi"]]), col = "green")
+lines(c(1:44), map(final_cims_cwts, ~.[["nmi"]]), col = "orange")
+lines(c(1:44), map(final_cls_cwts, ~.[["nmi"]]), col = "purple")
+
+# Plot all compare scores on the 'split.join' method
+plot(c(1:44), map(final_cfgs_cims , ~.[["split.join"]]), type = "l", ylab = 'Comparison Score', main = 'Comparison Scores using Split.Join Method', ylim = c(0,305))
+lines(c(1:44), map(final_cfgs_cls, ~.[["split.join"]]), col = "red")
+lines(c(1:44), map(final_cfgs_cwts, ~.[["split.join"]]), col = "dodgerblue")
+lines(c(1:44), map(final_cims_cls, ~.[["split.join"]]), col = "green")
+lines(c(1:44), map(final_cims_cwts, ~.[["split.join"]]), col = "orange")
+lines(c(1:44), map(final_cls_cwts, ~.[["split.join"]]), col = "purple")
+
+# Plot all compare scores on the 'adjusted.rand' method
+plot(c(1:44), map(final_cfgs_cims , ~.[["adjusted.rand"]]), type = "l", ylab = 'Comparison Score', main = 'Comparison Scores using Adjusted Rand Method', ylim = c(0,1))
+lines(c(1:44), map(final_cfgs_cls, ~.[["adjusted.rand"]]), col = "red")
+lines(c(1:44), map(final_cfgs_cwts, ~.[["adjusted.rand"]]), col = "dodgerblue")
+lines(c(1:44), map(final_cims_cls, ~.[["adjusted.rand"]]), col = "green")
+lines(c(1:44), map(final_cims_cwts, ~.[["adjusted.rand"]]), col = "orange")
+lines(c(1:44), map(final_cls_cwts, ~.[["adjusted.rand"]]), col = "purple")
+```
+
+
+
+CREATE DATAFRAMES THAT CONTAIN THE COMPARISON SCORES FOR EACH COMPARISON USING EACH METHOD
+```{r}
+rand_df <- data.frame(cfgs_cims = unlist(map(final_cfgs_cims, ~.[["rand"]])), 
+                      cfgs_cls = unlist(map(final_cfgs_cls, ~.[["rand"]])), 
+                      cfgs_cwts = unlist(map(final_cfgs_cwts, ~.[["rand"]])),
+                      cims_cls = unlist(map(final_cims_cls, ~.[["rand"]])),
+                      cims_cwts = unlist(map(final_cims_cwts, ~.[["rand"]])), 
+                      cls_cwts = unlist(map(final_cls_cwts, ~.[["rand"]])))
+
+vi_df <- data.frame(cfgs_cims = unlist(map(final_cfgs_cims, ~.[["vi"]])), 
+                      cfgs_cls = unlist(map(final_cfgs_cls, ~.[["vi"]])), 
+                      cfgs_cwts = unlist(map(final_cfgs_cwts, ~.[["vi"]])),
+                      cims_cls = unlist(map(final_cims_cls, ~.[["vi"]])),
+                      cims_cwts = unlist(map(final_cims_cwts, ~.[["vi"]])), 
+                      cls_cwts = unlist(map(final_cls_cwts, ~.[["vi"]])))
+
+nmi_df <- data.frame(cfgs_cims = unlist(map(final_cfgs_cims, ~.[["nmi"]])), 
+                      cfgs_cls = unlist(map(final_cfgs_cls, ~.[["nmi"]])), 
+                      cfgs_cwts = unlist(map(final_cfgs_cwts, ~.[["nmi"]])),
+                      cims_cls = unlist(map(final_cims_cls, ~.[["nmi"]])),
+                      cims_cwts = unlist(map(final_cims_cwts, ~.[["nmi"]])), 
+                      cls_cwts = unlist(map(final_cls_cwts, ~.[["nmi"]])))
+
+splitjoin_df <- data.frame(cfgs_cims = unlist(map(final_cfgs_cims, ~.[["split.join"]])), 
+                      cfgs_cls = unlist(map(final_cfgs_cls, ~.[["split.join"]])), 
+                      cfgs_cwts = unlist(map(final_cfgs_cwts, ~.[["split.join"]])),
+                      cims_cls = unlist(map(final_cims_cls, ~.[["split.join"]])),
+                      cims_cwts = unlist(map(final_cims_cwts, ~.[["split.join"]])), 
+                      cls_cwts = unlist(map(final_cls_cwts, ~.[["split.join"]])))
+
+adjustedrand_df <- data.frame(cfgs_cims = unlist(map(final_cfgs_cims, ~.[["adjusted.rand"]])), 
+                      cfgs_cls = unlist(map(final_cfgs_cls, ~.[["adjusted.rand"]])), 
+                      cfgs_cwts = unlist(map(final_cfgs_cwts, ~.[["adjusted.rand"]])),
+                      cims_cls = unlist(map(final_cims_cls, ~.[["adjusted.rand"]])),
+                      cims_cwts = unlist(map(final_cims_cwts, ~.[["adjusted.rand"]])), 
+                      cls_cwts = unlist(map(final_cls_cwts, ~.[["adjusted.rand"]])))
+```
+
+
+LEAST VARIATION IN A CORRELATION MATRIX CORRESPONDS TO THE METHOD WITH THE MOST CONSISTENT VALUE
+```{r}
+
+print(paste('Adjusted Rand:', sum(abs(cov(cor(adjustedrand_df))))))
+print(paste('Split Join:', sum(abs(cov(cor(splitjoin_df))))))
+print(paste('NMI:', sum(abs(cov(cor(nmi_df))))))
+print(paste('VI:', sum(abs(cov(cor(vi_df))))))
+print(paste('Rand:', sum(abs(cov(cor(rand_df))))))
+
+
+print(paste('Adjusted Rand:', mean(var(cor(adjustedrand_df)))))
+print(paste('Split Join:', mean(var(cor(splitjoin_df)))))
+print(paste('NMI:', mean(var(cov(cor(nmi_df))))))
+print(paste('VI:', mean(var(cov(cor(vi_df))))))
+print(paste('Rand:', mean(var(cov(cor(rand_df))))))
+
+
+
+#print(paste('Adjusted Rand:', sum(cor(adjustedrand_df))))
+#print(paste('Split Join:', sum(cor(splitjoin_df))))
+#print(paste('NMI:', sum(cor(nmi_df))))
+#print(paste('VI:', sum(cor(vi_df))))
+#print(paste('Rand:', sum(cor(rand_df))))
+```
+VI it is.
+
+
+
+
+
+
+```{r}
+# Plot all compare scores on the 'VI' method
+plot(c(1:44), map(final_cfgs_cims , ~.[["vi"]]), type = "l", ylab = 'Comparison Score', main = 'Comparison Scores using VI Method', ylim = c(0,2))
+lines(c(1:44), map(final_cfgs_cls, ~.[["vi"]]), col = "red")
+lines(c(1:44), map(final_cfgs_cwts, ~.[["vi"]]), col = "dodgerblue")
+lines(c(1:44), map(final_cims_cls, ~.[["vi"]]), col = "green")
+lines(c(1:44), map(final_cims_cwts, ~.[["vi"]]), col = "orange")
+lines(c(1:44), map(final_cls_cwts, ~.[["vi"]]), col = "purple")
+```
+
+
+NOW IDENTIFY WHICH ALGORITHM HAS THE HIGHEST (LOWEST) CORRELATION SCORE WHICH CORRESPONDS TO THE MOST (LEAST) 'ALIKE' OF THE CLUSTERING ALGORITHMS
+```{r}
+cor(vi_df)
+```
+
+```{r}
+lapply(vi_df, mean)
+```
+```{r}
+# Create function to normalize all scores to 0 and 1
+range01 <- function(x){(x-min(x))/(max(x)-min(x))}
+
+# Combine all scores dataframes
+scoresdf <- bind_rows(vi_df, nmi_df, rand_df, splitjoin_df, adjustedrand_df)
+
+# Apply the normalizing function to the dataframe, output is a list
+meancomparescores <- lapply(scoresdf, range01)
+
+# Get the mean scores for the 44 scores for each of the 4 choose 2 comparisons
+meancomparescores <- lapply(meancomparescores, mean)
+                               
+cfgscore <- meancomparescores$cfgs_cims + meancomparescores$cfgs_cls + meancomparescores$cfgs_cwts
+cimscore <- meancomparescores$cfgs_cims + meancomparescores$cims_cls + meancomparescores$cims_cwts
+clscore <- meancomparescores$cfgs_cls + meancomparescores$cims_cls + meancomparescores$cls_cwts
+cwtscore <- meancomparescores$cfgs_cwts + meancomparescores$cims_cwts + meancomparescores$cls_cwts
+```
+
+```{r}
+cfgscore
+cimscore
+clscore 
+cwtscore
+```
+Cluster_Infomap has the highest average comparison score, but in the first network it only detects one community. More importantly, the comparison scores of all clustering algorithms are clustered (pun intended) between .127 and .141 so choosing any one of them is probably fine.
+
+
+
+
+LET'S SEE HOW THE DIFFERENT CLUSTERING ALGORITHMS EFFECT THE CHART THAT COMPARES THE % OF D AND % OF R IN THE TOP TWO COMMUNITIES FOR EACH NETWORK
+
+```{r}
+# Run community detection on connected blocks
+connected_blocks_pos_cfg <- c()
+connected_blocks_pos_infomap <- c()
+connected_blocks_pos_louvain <- c()
+connected_blocks_pos_walktrap <- c()
+
+for (i in seq_along(g_pos_networks_connected)){
+  connected_blocks_pos_cfg[[i]] <- cluster_fast_greedy(g_pos_networks_connected[[i]])
+  connected_blocks_pos_infomap[[i]] <- cluster_infomap(g_pos_networks_connected[[i]])
+  connected_blocks_pos_louvain[[i]] <- cluster_louvain(g_pos_networks_connected[[i]])
+  connected_blocks_pos_walktrap[[i]] <- cluster_walktrap(g_pos_networks_connected[[i]])
+}
+
+```
+
+
+
+```{r}
+plot(connected_blocks_pos_infomap[[1]], g_pos_networks_connected[[1]], vertex.label = vertex_attr(g_pos_networks_connected[[1]])$Party, main = 'Positive Relationship - Clusters')
+```
+
+
+
+
+```{r}
+party_community_tables_cfg <- c()
+party_community_tables_infomap <- c()
+party_community_tables_louvain <- c()
+party_community_tables_walktrap <- c()
+
+for (i in 1:44){
+  party_community_tables_cfg[[i]] <- table(vertex_attr(g_pos_networks_connected[[i]])$Party, connected_blocks_pos_cfg[[i]]$membership)
+  party_community_tables_infomap[[i]] <- table(vertex_attr(g_pos_networks_connected[[i]])$Party, connected_blocks_pos_infomap[[i]]$membership)
+  party_community_tables_louvain[[i]] <- table(vertex_attr(g_pos_networks_connected[[i]])$Party, connected_blocks_pos_louvain[[i]]$membership)
+  party_community_tables_walktrap[[i]] <- table(vertex_attr(g_pos_networks_connected[[i]])$Party, connected_blocks_pos_walktrap[[i]]$membership)
+}
+```
+
+
+```{r}
+# Store vector of dataframes showing number of Ds and Rs in the two'largest'
+d_r_prop_tables <- c()
+
+# Function that takes in a contingency table, keeps the two largest communities (columns in the table), renames the communities to 1 and 2, extracts the political 
+calculate_largest_communities <- function(tables){
+  # Sort table by columnsums (number of nodes in a community) and keep only the top two
+  tables <- tables[, names(sort(desc(colSums(prop.table(tables)))))[1:2]]
+  colnames(tables) <- c(1,2)
+  
+  # Extract the rowname (political party) with the highest value in column 1 - that is the dominant political party for that community (column) 
+  mainparty_community1 <- names(sort(desc(tables[,1])))[1]
+    # Extract the rowname (political party) with the highest value in column 2 - that is the dominant political party for that community (column) 
+  mainparty_community2 <- names(sort(desc(tables[,2])))[1]
+
+  # Turn table into df
+  table_dfs <- as.data.frame(tables)
+  
+  # Remove non Democrat and non Republican members
+  table_dfs <- table_dfs %>% subset(Var1 %in% c('D', 'R'))
+  table_dfs$Var1 <- factor(table_dfs$Var1)
+  
+  # Calculate a proportion from the Frequency counts
+  table_dfs <- table_dfs %>% mutate(Prop = round(Freq/sum(Freq), 3))
+  table_dfs$MainPartyCommunity <- '.'
+  table_dfs$MainPartyCommunity[table_dfs$Var2 == 1] <- mainparty_community1
+  table_dfs$MainPartyCommunity[table_dfs$Var2 == 2] <- mainparty_community2
+  return(table_dfs)
+}
+
+for (i in seq_along(party_community_tables_walktrap)){
+  d_r_prop_tables[[i]] <- calculate_largest_communities(party_community_tables_walktrap[[i]])
+}
+
+# Convert list of dataframes into 1 dataframe and include .id = 'Session' so we know what list(session) the data is from
+party_community_df <- bind_rows(d_r_prop_tables, .id = 'Session')
+```
+
+
+```{r}
+# Get the maximum Freq when comparing the session and community.
+party_community_df <- party_community_df %>% group_by(Session, Var2) %>% mutate(dom = max(Freq))
+
+# Create new column which should have the label of the dominant party in a specific Session-Community. Then we can label communities as 'Repub' or 'Dem' instead of 1 and 2 which sometimes are R-dominated and othertimes D-dominates
+party_community_df <- party_community_df %>% group_by(Session, Var2) %>% mutate(mainparty = ifelse(dom == Freq, as.character(Var1), 'ignore'))
+party_community_df <- party_community_df %>% group_by(Session, Var2) %>% mutate(Percentage = Freq/sum(Freq))
+
+# Change Factors to Character, Character to Numeric for area plotting
+party_community_df$Session <- as.numeric(party_community_df$Session)
+party_community_df$Var1 <- as.character(party_community_df$Var1)
+
+# Ggplot was having issues with the tibble, so converting to dataframe
+party_community_df <- data.frame(party_community_df)
+
+# Changing Variable Names and Values for interpretation purposes
+names(party_community_df)[names(party_community_df) == "Var1"] <- "Political Party"
+party_community_df$`Political Party`[party_community_df$`Political Party` == 'D'] <- 'Democrat'
+party_community_df$`Political Party`[party_community_df$`Political Party` == 'R'] <- 'Republican'
+
+# Remove any sessions in which one party dominated both communities for the sake of the visualization below
+party_community_df <- party_community_df %>% group_by(Session) %>% mutate('1partydom' = length(unique(mainparty)))
+party_community_df <- party_community_df %>% group_by(Session) %>% subset(`1partydom` > 2)
+```
+
+
+
+```{r}
+# Show Percentage of Ds and Rs in the House for the D-dominated Community and R-dominated Community Over time. Ignoring session 2 because both communities were D-dominated
+#ggplot(party_community_df[party_community_df$Session %in% c(1, 3:22), ], aes(x = Session, y = Percentage, fill = `Political Party`)) +
+ggplot(party_community_df[party_community_df$Session <= 22, ], aes(x = Session, y = Percentage, fill = `Political Party`)) +
+  geom_area(alpha=0.85, size = 1) + 
+  
+  facet_wrap(~MainPartyCommunity, 
+             labeller = as_labeller(c('D' = 'Democrat-Dominated Community', 'R' = 'Republican-Dominated Community'))) + 
+  
+  scale_fill_manual(values = c("blue", "red")) + 
+  
+  ggtitle('Trends in Polarization in the U.S. House of Representatives\nEvolution of the Distribution of Political Party Membership in Detected Communities') +
+  
+  ylab("Percentage of Total Community Membership by Party") +
+  
+  xlab("Congressional Session") +
+  
+  theme_economist() +
+  
+  scale_color_economist() +
+  
+  theme(axis.title.y = element_text(size = 16, angle = 90), 
+        axis.text.y = element_text(size = 13, margin = margin(r = 0)),
+        axis.title.x = element_text(size = 16),
+        axis.text.x = element_text(size = 13),
+        legend.title = element_text(size = 16),
+        legend.box.margin = margin(6),
+        legend.background = element_rect(fill = "lightgray"),
+        plot.title = element_text(hjust = 0.5),
+        panel.grid.major = element_blank(),
+        panel.spacing = unit(0, "mm"))
+```
+
+
+
+```{r}
+# Show Percentage of Ds and Rs in the Senate for the D-dominated Community and R-dominated Community Over time. Ignoring session 26 because both communities were D-dominated
+ggplot(party_community_df[party_community_df$Session >= 23, ], aes(x = Session, y = Percentage, fill = `Political Party`)) + 
+  
+  geom_area(alpha = .85, size = 1) + facet_wrap(~MainPartyCommunity) + 
+    
+  facet_wrap(~MainPartyCommunity, 
+             labeller = as_labeller(c('D' = 'Democrat-Dominated Community', 'R' = 'Republican-Dominated Community'))) + 
+  
+  scale_fill_manual(values = c("blue", "red")) + 
+  
+  ggtitle('Trends in Polarization in the U.S. Senate\nEvolution of the Distribution of Political Party Membership in Detected Communities') +
+  
+  ylab("Percentage of Total Community Membership by Party") +
+  
+  xlab("Congressional Session") +
+  
+  theme_economist() +
+  
+  scale_color_economist() +
+  
+  theme(axis.title.y = element_text(size = 16, angle = 90), 
+        axis.text.y = element_text(size = 13, margin = margin(r = 0)),
+        axis.title.x = element_text(size = 16),
+        axis.text.x = element_text(size = 13),
+        legend.title = element_text(size = 16),
+        legend.box.margin = margin(6),
+        legend.background = element_rect(fill = "lightgray"),
+        plot.title = element_text(hjust = 0.5),
+        panel.grid.major = element_blank(),
+        panel.spacing = unit(0, "mm"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#Constructing Complete Network ------
+
+CONSTRUCTING COMPLETE NETWORK TO SEE IF BEING IN A NETWORK FOR A LONGER TIME HAS AN IMPACT ON LIKELIHOOD TO FORM POSITIVE RELATIONSHIP
+```{r}
+# Need to make these graphs weighted because multiple connections are being collapsed into one (maybe use degree)
+entire_senate_pos_network <- union(g_pos_networks[[23]], g_pos_networks[24:44])
+entire_senate_neg_network <- union(g_neg_networks[[23]], g_neg_networks[24:44])
+entire_house_pos_network <- union(g_pos_networks[[1]], g_pos_networks[2:22])
+entire_house_neg_network <- union(g_neg_networks[[1]], g_neg_networks[2:22])
+
+#print(length(V(entire_senate_pos_network)))
+#entire_senate_pos_network <- union(entire_senate_pos_network, g_pos_networks[[25]])
+#print(length(V(entire_senate_pos_network)))
+#entire_senate_pos_network <- union(entire_senate_pos_network, g_pos_networks[[26]])
+#print(length(V(entire_senate_pos_network)))
+#entire_senate_pos_network <- union(entire_senate_pos_network, g_pos_networks[[27]])
+#print(length(V(entire_senate_pos_network)))
+#entire_senate_pos_network <- union(entire_senate_pos_network, g_pos_networks[[28]])
+#print(length(V(entire_senate_pos_network)))
+#entire_senate_pos_network <- union(entire_senate_pos_network, g_pos_networks[[29]])
+#print(length(V(entire_senate_pos_network)))
+#entire_senate_pos_network <- union(entire_senate_pos_network, g_pos_networks[[30]])
+#print(length(V(entire_senate_pos_network)))
+#entire_senate_pos_network <- union(entire_senate_pos_network, g_pos_networks[[31]])
+#print(length(V(entire_senate_pos_network)))
+#entire_senate_pos_network <- union(entire_senate_pos_network, g_pos_networks[[32]])
+#print(length(V(entire_senate_pos_network)))
+#entire_senate_pos_network <- union(entire_senate_pos_network, g_pos_networks[[33]])
+#print(length(V(entire_senate_pos_network)))
+#entire_senate_pos_network <- union(entire_senate_pos_network, g_pos_networks[[34]])
+#print(length(V(entire_senate_pos_network)))
+#entire_senate_pos_network <- union(entire_senate_pos_network, g_pos_networks[[35]])
+#print(length(V(entire_senate_pos_network)))
+#entire_senate_pos_network <- union(entire_senate_pos_network, g_pos_networks[[36]])
+#print(length(V(entire_senate_pos_network)))
+#entire_senate_pos_network <- union(entire_senate_pos_network, g_pos_networks[[37]])
+#print(length(V(entire_senate_pos_network)))
+#entire_senate_pos_network <- union(entire_senate_pos_network, g_pos_networks[[38]])
+#print(length(V(entire_senate_pos_network)))
+#entire_senate_pos_network <- union(entire_senate_pos_network, g_pos_networks[[39]])
+#print(length(V(entire_senate_pos_network)))
+#entire_senate_pos_network <- union(entire_senate_pos_network, g_pos_networks[[40]])
+#print(length(V(entire_senate_pos_network)))
+#entire_senate_pos_network <- union(entire_senate_pos_network, g_pos_networks[[41]])
+#print(length(V(entire_senate_pos_network)))
+#entire_senate_pos_network <- union(entire_senate_pos_network, g_pos_networks[[42]])
+#print(length(V(entire_senate_pos_network)))
+#entire_senate_pos_network <- union(entire_senate_pos_network, g_pos_networks[[43]])
+#print(length(V(entire_senate_pos_network)))
+#entire_senate_pos_network <- union(entire_senate_pos_network, g_pos_networks[[44]])
+#print(length(V(entire_senate_pos_network)))
+```
+
+
+
+```{r}
+# Network of every single possible actor to see if it is a connected network
+meta <- union(entire_house_pos_network, entire_senate_pos_network)
+meta <- union(meta, entire_house_neg_network)
+meta <- union(meta, entire_senate_neg_network)
+print(is_connected(meta))
+```
+
+Interesting that everyone in the network (across time and legislative bodies) is connected
+
+```{r}
+mean_distance(meta, directed = FALSE)
+distance_table(meta)
+```
+
+
+```{r}
+plot(entire_senate_pos_network, vertex.label = NA, layout = layout.reingold.tilford(entire_senate_pos_network, circular=T), vertex.size = 1)
+```
+
+
+CREATE A DATAFRAME OF EVERY SENATE/CONGRESS FOR SIMILAR REASONS TO THE ANALYSIS ABOVE
+WE CAN COUNT HOW MANY TIMES A REP APPEARS IN THE DATAFRAME TO KNOW HOW MANY SESSIONS THEY SERVED
+```{r}
+# Use the list of dataframes created when originally reading in the data and use only the first four columns of name, state, party
+for (i in seq_along(df)){
+  df[[i]] <- df[[i]][,1:4]
+}
+
+# Bind all the dataframes together
+all_sessions_df <- bind_rows(df)
+
+# Calculate the number of members for each network
+membs <- c()
+for (i in seq_along(df)){
+  membs[[i]] <- nrow(df[[i]])
+}
+
+# Create a vector of session numbers
+seshs <- rep(93:114, 2)
+
+# Create a vector of house types (House vs Senate)
+type <- rep(c('H','S'), each = 22)
+
+# Combine the session and session type
+sesh_type <- paste(type,seshs)
+
+# Add the session number for each row in the dataframe
+all_sessions_df$Sesh_type <- rep(sesh_type, membs)
+
+# Add the number of times they have served as a new variable called Tenure
+all_sessions_df <- all_sessions_df %>% group_by(Covariates) %>% mutate('Tenure' = n())
+```
+
+
+USING THE 'ENTIRE' NETWORKS CREATED EARLIER, ADD THE NUMBER OF POSITIVE/NEGATIVE CONNECTIONS FOR THE SENATE AND HOUSE
+```{r}
+# Get the degree for both networks (positive and negative) for both the Senate and House 'entire' networks
+# The degrees accumulate from each network (if someone served 2 terms as a senator and had 10 positive connections in one session and 15 in another, their degree in the all_sessions network would be 25)
+senate_pos_connections <- degree(entire_senate_pos_network)
+senate_neg_connections <- degree(entire_senate_neg_network)
+house_pos_connections <- degree(entire_house_pos_network)
+house_neg_connections <- degree(entire_house_neg_network)
+
+# Then add these results to the all_sessions_df dataframe
+all_sessions_df$Total_Unique_Senate_Pos_Connections <- senate_pos_connections[match(all_sessions_df$Covariates, names(senate_pos_connections))]
+all_sessions_df$Total_Unique_Senate_Neg_Connections <- senate_neg_connections[match(all_sessions_df$Covariates, names(senate_neg_connections))]
+all_sessions_df$Total_Unique_House_Pos_Connections <- house_pos_connections[match(all_sessions_df$Covariates, names(house_pos_connections))]
+all_sessions_df$Total_Unique_House_Neg_Connections <- house_neg_connections[match(all_sessions_df$Covariates, names(house_neg_connections))]
+```
+
+
+```{r}
+# Group by individuals and:
+
+# keep their tenure, total positive connections, and party (each rep has only served in 1 party - this was checked using all_sessions_df %>% group_by(Covariates) %>% summarize('Parties' = n_distinct(Party)) %>% arrange(Parties))
+all_sessions_df_tspc <- all_sessions_df %>% group_by(Covariates) %>% summarize(tspc = mean(Total_Unique_Senate_Pos_Connections, na.rm = TRUE), tenure = mean(Tenure), party = first(Party))
+all_sessions_df_tspc <- na.omit(all_sessions_df_tspc)
+
+# keep their tenure, total negative connections, and party
+all_sessions_df_tsnc <- all_sessions_df %>% group_by(Covariates) %>% summarize(tsnc = mean(Total_Unique_Senate_Neg_Connections, na.rm = TRUE), tenure = mean(Tenure), party = first(Party))
+all_sessions_df_tsnc <- na.omit(all_sessions_df_tsnc)
+```
+
+CALCULATE DEGREE PER SESSION TO SEE IF THE ALL_SESSIONS_DF IS JUST LOOKING AT JUST UNIQUE EDGES OR TOTAL EDGES
+```{r}
+all_pos_degrees <- c()
+all_neg_degrees <- c()
+
+
+for (i in seq_along(g_pos_networks)){
+  all_pos_degrees[[i]] <- degree(g_pos_networks[[i]])
+}
+
+for (i in seq_along(g_neg_networks)){
+  all_neg_degrees[[i]] <- degree(g_neg_networks[[i]])
+}
+
+# Pull out 1 senator to compare degrees per session to the 'Senate_Pos_Connections' in the all_sessions_df dataframe
+ewar_degrees <- c()
+
+for (i in seq_along(all_pos_degrees)){
+  ewar_degrees[[i]] <- all_pos_degrees[[i]]['Warren, E. (MA-D)']
+}
+```
+
+```{r}
+ewar_degrees[43:44]
+all_sessions_df %>%  filter(Covariates == 'Warren, E. (MA-D)')
+```
+
+These must be unique connections, because Elizabeth Warren has 39 positive connections in one session and 33 in another, but only 41 for the total senate positive connections
+
+Let's add the total number of positive connections in each session
+```{r}
+# Create a dataframe of each rep for each session and their degree
+
+# Start by unpacking the list of vectors and keeping their names (which correspond to the vertex names and includes Name, party, state)
+all_pos_degrees <- unlist(all_pos_degrees, recursive = TRUE, use.names = TRUE)
+all_neg_degrees <- unlist(all_neg_degrees, recursive = TRUE, use.names = TRUE)
+
+# Then turn that unpack list into a dataframe
+all_pos_degrees_df <- as.data.frame(all_pos_degrees)
+all_neg_degrees_df <- as.data.frame(all_neg_degrees)
+
+# Then assign the names from the unpacked list (the vertex names) to a new column in the dataframe
+all_pos_degrees_df$Covariates <- names(all_pos_degrees)
+all_neg_degrees_df$Covariates <- names(all_neg_degrees)
+
+# Finally, assign these variables to the all_sessions_df
+all_sessions_df$Pos_Connections <- all_pos_degrees_df$all_pos_degrees
+all_sessions_df$Neg_Connections <- all_neg_degrees_df$all_neg_degrees
+```
+
+
+```{r}
+#all_sessions_df_pc <- all_sessions_df %>% group_by(Covariates) %>% summarize(pc = mean(Total_Unique_Senate_Pos_Connections, na.rm = TRUE), tenure = mean(Tenure), party = first(Party))
+#all_sessions_df_pc <- na.omit(all_sessions_df_tspc)
+#
+#all_sessions_df_pc <- all_sessions_df %>% group_by(Covariates) %>% summarize(tspc = mean(Total_Unique_Senate_Pos_Connections, na.rm = TRUE), tenure = mean(Tenure), party = first(Party))
+#all_sessions_df_pc <- na.omit(all_sessions_df_tspc)
+par(mfrow=c(1,2))
+plot(all_sessions_df$Tenure, all_sessions_df$Pos_Connections)
+plot(all_sessions_df$Tenure, all_sessions_df$Neg_Connections)
+```
+Tenure excludes data before 1973 (if a Representative served in the 90-94th Sessions, our data would only show a tenure of 2 because we start in the 93 Session.)
+
+
+```{r}
+lm(all_sessions_df$Pos_Connections ~ all_sessions_df$Tenure + all_sessions_df$Sesh_type)
+```
+
+
+```{r}
+all_sessions_df_tspc %>% 
+  ggplot(aes(x = tenure, y = tspc, color = party)) +
+  geom_point() +
+  geom_smooth() +
+  scale_color_manual(values=c("white", "blue", "purple", "red")) +
+  labs(title="Comparing Total Unique Positive Connections to Tenure",
+        x = "Tenure", y = "Total Unique Positive Connections")
+
+all_sessions_df_tsnc %>% 
+  ggplot(aes(x = tenure, y = tsnc, color = party)) +
+  geom_point() +
+  geom_smooth() +
+  scale_color_manual(values=c("white", "blue", "purple", "red")) +
+  labs(title="Comparing Total Unique Negative Connections to Tenure",
+        x = "Tenure", y = "Total Unique Negative Connections")
+```
+
+
+```{r}
+lm(all_sessions_df_tspc$tspc ~ all_sessions_df_tsnc$tenure)
+```
+
+
+```{r}
+all_sessions_df %>% 
+  ggplot(aes(x = Tenure, y = Pos_Connections, color = Party)) +
+  geom_point() +
+  geom_smooth() +
+  scale_color_manual(values=c("white", "blue", "purple", "red", "green", "black")) +
+  labs(title="Comparing Total Positive Connections to Tenure",
+        x = "Tenure", y = "Total Positive Connections")
+
+all_sessions_df %>% 
+  ggplot(aes(x = Tenure, y = Neg_Connections, color = Party)) +
+  geom_point() +
+  geom_smooth() +
+  scale_color_manual(values=c("white", "blue", "purple", "red", "green", "black")) +
+  labs(title="Comparing Total Negative Connections to Tenure",
+        x = "Tenure", y = "Total Negative Connections")
+```
+
+
+
+
+
+
+```{r}
+#all_sessions_df %>%  filter(Covariates == 'Cochran, T. (MS-R)')
+all_sessions_df %>% group_by(Covariates) %>% summarize('Parties' = n_distinct(Party)) %>% arrange(Parties)
+```
+
+
+
+#Unused Code/Garbage Can ------
+```{r}
+# Function reads in table with columns as communities and Partys as rows
+# Turns table into a dataframe (goes from wide to skinny) with 3 columns where Var1 is Party, Var2 is Community, and Freq is the value count of the number of people of a certain party in a community
+calculate_largest_communities <- function(tables){
+  # Turn table into df
+  table_dfs <- as.data.frame(tables)
+  # Create second df grouped on Community with Total = total membership
+  group_sum <- table_dfs %>% group_by(Var2) %>% summarize(Total = sum(Freq), .groups = 'drop')
+  
+  # We only want the two largest communities; check if the unique number of communities is greater than 2
+  if (length(unique(table_dfs$Var2)) > 2){
+  # If greater than 2 communities, identify the community with the smallest membership
+  group_sum <- group_sum %>% slice(which.min(Total))
+  # Filter the dataframe to remove the community with the smallest membership
+  table_dfs <- table_dfs %>% filter(Var2 != group_sum$Var2)
+  }
+  
+  group_sum <- table_dfs %>% group_by(Var2) %>% summarize(Total = sum(Freq), .groups = 'drop')
+  
+  if (length(unique(table_dfs$Var2)) > 2){
+  group_sum <- group_sum %>% slice(which.min(Total))
+  table_dfs <- table_dfs %>% filter(Var2 != group_sum$Var2)
+  }
+  
+  group_sum <- table_dfs %>% group_by(Var2) %>% summarize(Total = sum(Freq), .groups = 'drop')
+  
+  if (length(unique(table_dfs$Var2)) > 2){
+  group_sum <- group_sum %>% slice(which.min(Total))
+  table_dfs <- table_dfs %>% filter(Var2 != group_sum$Var2)
+  }
+  
+  table_dfs <- table_dfs %>% subset(Var1 %in% c('D', 'R'))
+  return(table_dfs)
+}
+
+
+```
+
+
+```{r}
+for (i in 1:18){
+ggplot(d_r_prop_tables[[i]], aes(fill=Var1, y=Freq, x=Var2)) + 
+    geom_bar(position="stack", stat="identity")
+}
+```
+
+
+```{r}
+# Or using the data table
+calcparties <- function(tables){
+     tables <- tables[, names(sort(desc(colSums(prop.table(tables)))))[1:2]]
+     colnames(tables) <- c(1,2)
+     
+     print(tables)
+     
+     print(names(sort(desc(tables[,1])))[1])
+     print(names(sort(desc(tables[,2])))[1])
+     
+     mainparty_community1 <- names(sort(desc(tables[,1])))[1]
+     mainparty_community2 <- names(sort(desc(tables[,2])))[1]
+     
+     
+     return(mainparty_community1)}
+
+```
+
+```{r}
+calcparties(party_community_tables[[2]])
+```
+
+
+RETHINKING SBM MODEL DUE TO DEGREE DISTRIBUTIONS
+```{r}
+# Examine the degree distribution of the network graphs
+
+par(mfrow = c(2,2))
+
+hist(degree(g_pos)[vertex_attr(g_pos)$Party == 'D'], , xlab = 'Degree', 
+     main = 'Degree Distribution Positive Connections - Democratic Party', col = 'blue')
+
+hist(degree(g_pos)[vertex_attr(g_pos)$Party == 'R'], , xlab = 'Degree', 
+     main = 'Degree Distribution Positive Connections - Republican Party', col = 'red')
+
+hist(degree(g_neg)[vertex_attr(g_neg)$Party == 'D'], , xlab = 'Degree', 
+     main = 'Degree Distribution Negative Connections - Democratic Party', col = 'blue')
+
+hist(degree(g_neg)[vertex_attr(g_pos)$Party == 'R'], , xlab = 'Degree', 
+     main = 'Degree Distribution Negative Connections - Republican Party', col = 'red')
+```
+Similar degree distributions when comparing parties on the same type of network (positive vs negative), although the distribution is varied enough that we should consider a degree-corrected stochastic block model.
+
+
+
